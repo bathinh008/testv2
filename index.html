@@ -1414,7 +1414,7 @@
 				}
 
 				const saved = JSON.parse(savedText);
-				if (!saved.credentialId || !saved.refresh_token || !saved.access_token) {
+				if (!saved.credentialId || !saved.refresh_token) {
 					showAlert("Dữ liệu lỗi", "Dữ liệu vân tay trên máy này không hợp lệ. Vui lòng xóa và kích hoạt lại.", "error");
 					return;
 				}
@@ -1431,21 +1431,34 @@
 					}
 				});
 
-				const { data, error } = await client.auth.setSession({
-					access_token: saved.access_token,
+				// Ưu tiên refresh bằng refresh_token để tránh lỗi "Auth session missing" khi access_token cũ hết hạn.
+				let result = await client.auth.refreshSession({
 					refresh_token: saved.refresh_token
 				});
 
-				if (error) throw error;
-
-				// Cập nhật token mới nếu Supabase refresh session
-				if (data && data.session) {
-					saved.access_token = data.session.access_token;
-					saved.refresh_token = data.session.refresh_token;
-					saved.updatedAt = new Date().toISOString();
-					localStorage.setItem(MINI_POS_PASSKEY_KEY, JSON.stringify(saved));
-					refreshLocalPasskeyLoginButton();
+				// Nếu refresh không được, thử setSession bằng cặp token cũ.
+				if (result.error && saved.access_token) {
+					result = await client.auth.setSession({
+						access_token: saved.access_token,
+						refresh_token: saved.refresh_token
+					});
 				}
+
+				if (result.error) throw result.error;
+
+				const session = result.data && result.data.session;
+				if (!session) {
+					throw new Error("Không khôi phục được phiên đăng nhập. Vui lòng đăng nhập bằng mật khẩu và kích hoạt lại vân tay.");
+				}
+
+				// Lưu token mới sau khi refresh thành công.
+				saved.access_token = session.access_token;
+				saved.refresh_token = session.refresh_token;
+				saved.email = (session.user && session.user.email) || saved.email;
+				saved.userId = (session.user && session.user.id) || saved.userId;
+				saved.updatedAt = new Date().toISOString();
+				localStorage.setItem(MINI_POS_PASSKEY_KEY, JSON.stringify(saved));
+				refreshLocalPasskeyLoginButton();
 
 				showAlert("Thành công", "Đăng nhập bằng vân tay thành công.", "success", () => {
 					checkSession();
@@ -1454,10 +1467,12 @@
 				console.error("loginWithLocalPasskey error:", err);
 				let msg = err.message || String(err);
 				if (err.name === "NotAllowedError") msg = "Bạn đã hủy xác thực hoặc xác thực không thành công.";
+				if (msg.toLowerCase().includes("auth session missing")) {
+					msg = "Phiên đăng nhập đã mất hoặc token cũ không còn dùng được. Bạn hãy đăng nhập bằng email/mật khẩu, sau đó bấm kích hoạt vân tay lại.";
+				}
 				showAlert("Lỗi đăng nhập vân tay", msg, "error");
 			}
 		}
-
 		function disableLocalPasskey() {
 			localStorage.removeItem(MINI_POS_PASSKEY_KEY);
 			refreshLocalPasskeyLoginButton();
