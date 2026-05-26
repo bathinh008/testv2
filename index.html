@@ -259,7 +259,7 @@
 					<div class="flex-grow border-t border-gray-200"></div>
 				</div>
 				
-				<button onclick="loginWithLocalPasskey()" class="w-full bg-slate-800 text-white py-3 rounded-xl font-bold shadow-sm active:scale-95 transition-transform flex items-center justify-center gap-2">
+				<button id="btn-local-passkey-login" onclick="loginWithLocalPasskey()" class="hidden w-full bg-slate-800 text-white py-3 rounded-xl font-bold shadow-sm active:scale-95 transition-transform flex items-center justify-center gap-2">
 					👆 Đăng nhập bằng vân tay / Passkey
 				</button>
 
@@ -1269,6 +1269,35 @@
 		// Nó dùng vân tay/Face ID/PIN của thiết bị để mở lại session Supabase đã lưu trên máy này.
 		const MINI_POS_PASSKEY_KEY = 'MINI_POS_LOCAL_PASSKEY_V1';
 
+		function hasValidLocalPasskeyData() {
+			try {
+				const savedText = localStorage.getItem(MINI_POS_PASSKEY_KEY);
+				if (!savedText) return false;
+
+				const saved = JSON.parse(savedText);
+				return !!(saved && saved.credentialId && saved.access_token && saved.refresh_token);
+			} catch (e) {
+				localStorage.removeItem(MINI_POS_PASSKEY_KEY);
+				return false;
+			}
+		}
+
+		function refreshLocalPasskeyLoginButton() {
+			const btn = document.getElementById('btn-local-passkey-login');
+			if (!btn) return;
+
+			if (hasValidLocalPasskeyData()) {
+				btn.classList.remove('hidden');
+			} else {
+				btn.classList.add('hidden');
+			}
+		}
+
+		// Ẩn cứng khi mới mở app, chỉ hiện lại nếu localStorage có dữ liệu vân tay hợp lệ.
+		document.addEventListener('DOMContentLoaded', refreshLocalPasskeyLoginButton);
+		window.addEventListener('storage', refreshLocalPasskeyLoginButton);
+
+
 		function mpBufferToBase64url(buffer) {
 			const bytes = new Uint8Array(buffer);
 			let str = '';
@@ -1366,6 +1395,7 @@
 				};
 
 				localStorage.setItem(MINI_POS_PASSKEY_KEY, JSON.stringify(saved));
+				refreshLocalPasskeyLoginButton();
 				showAlert("Thành công", "Đã kích hoạt đăng nhập bằng vân tay trên thiết bị này.", "success");
 			} catch (err) {
 				console.error("enableLocalPasskey error:", err);
@@ -1414,6 +1444,7 @@
 					saved.refresh_token = data.session.refresh_token;
 					saved.updatedAt = new Date().toISOString();
 					localStorage.setItem(MINI_POS_PASSKEY_KEY, JSON.stringify(saved));
+					refreshLocalPasskeyLoginButton();
 				}
 
 				showAlert("Thành công", "Đăng nhập bằng vân tay thành công.", "success", () => {
@@ -1429,6 +1460,7 @@
 
 		function disableLocalPasskey() {
 			localStorage.removeItem(MINI_POS_PASSKEY_KEY);
+			refreshLocalPasskeyLoginButton();
 			showAlert("Đã xóa", "Đã xóa đăng nhập vân tay trên thiết bị này.", "success");
 		}
 
@@ -3891,6 +3923,9 @@
 			// Staff lấy từ thông tin hiện tại hoặc phải lưu vào history nếu muốn chính xác người bán cũ
 			printReceipt(id, time, currentUserEmail, items, total, received, change, true);
 		}
+
+		// Kiểm tra lại trạng thái nút vân tay sau khi toàn bộ JS đã nạp.
+		setTimeout(refreshLocalPasskeyLoginButton, 0);
     </script>
 	<script>
 		// Đăng ký PWA Service Worker
