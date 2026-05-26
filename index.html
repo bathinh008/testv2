@@ -309,7 +309,7 @@
 				</button>
 				
 				<button onclick="confirmLogout()" class="flex items-center gap-2 bg-gray-100 text-gray-600 px-4 py-2 rounded-full border border-gray-200 font-bold text-xs whitespace-nowrap active:scale-95 transition-transform shrink-0">
-					<span>🚪 Đăng xuất</span>
+					<span>🔒 Khóa app</span>
 				</button>
 			</div>
 		</div>
@@ -462,7 +462,7 @@
 				</button>
 				<h2 class="font-bold text-xl text-gray-800">Quản Lý</h2>
 			</div>
-            <button onclick="forceLogout()" class="text-xs text-red-500 border border-red-200 px-2 py-1 rounded">Đăng xuất</button>
+            <button onclick="forceLogout()" class="text-xs text-red-500 border border-red-200 px-2 py-1 rounded">Khóa app</button>
         </div>
         <div class="p-3 bg-white border-b flex gap-2">
             <button onclick="switchAdminTab('products')" id="tab-products" class="flex-1 py-2.5 rounded-lg font-bold bg-blue-600 text-white">📦 Hàng hóa</button>
@@ -1277,16 +1277,32 @@
             }
         }
 
+        function lockAppOnly() {
+            // Khóa giao diện cục bộ: KHÔNG signOut, KHÔNG xóa Supabase token.
+            // Như vậy refresh_token vẫn còn hợp lệ để mở lại bằng vân tay/Passkey.
+            try {
+                stopScanner && stopScanner();
+            } catch (e) {}
+
+            document.getElementById('scan-screen')?.classList.add('hidden');
+            document.getElementById('admin-screen')?.classList.add('hidden');
+            document.getElementById('payment-screen')?.classList.add('hidden');
+            document.getElementById('login-screen')?.classList.remove('hidden');
+
+            refreshLocalPasskeyLoginButton();
+            const msg = document.getElementById('login-msg');
+            if (msg) msg.innerText = "";
+        }
+
         async function forceLogout() {
-            // Nếu đã kích hoạt vân tay thì chỉ "khóa app" cục bộ,
-            // không gọi signOut để tránh làm hỏng refresh_token dùng cho vân tay.
+            // Nếu đã kích hoạt vân tay thì nút Đăng xuất chỉ là KHÓA APP.
+            // Tuyệt đối không gọi client.auth.signOut(), vì signOut sẽ thu hồi refresh_token.
             if (hasValidLocalPasskeyData()) {
-                clearSupabaseStoredSessionOnly();
-                window.location.reload();
+                lockAppOnly();
                 return;
             }
 
-            // Nếu chưa kích hoạt vân tay thì đăng xuất Supabase như bình thường.
+            // Nếu chưa kích hoạt vân tay thì mới đăng xuất Supabase như bình thường.
             await client.auth.signOut();
             sessionStorage.clear();
             window.location.reload();
@@ -1320,6 +1336,36 @@
 				btn.classList.add('hidden');
 			}
 		}
+
+		function saveLatestSessionToLocalPasskey(session) {
+			// Supabase có thể tự refresh token nền. Nếu không cập nhật token mới,
+			// token đã lưu cho vân tay có thể cũ và gây lỗi auth session missing.
+			try {
+				if (!session || !session.refresh_token) return;
+				const savedText = localStorage.getItem(MINI_POS_PASSKEY_KEY);
+				if (!savedText) return;
+
+				const saved = JSON.parse(savedText);
+				if (!saved || !saved.credentialId) return;
+
+				saved.access_token = session.access_token;
+				saved.refresh_token = session.refresh_token;
+				saved.email = (session.user && session.user.email) || saved.email;
+				saved.userId = (session.user && session.user.id) || saved.userId;
+				saved.updatedAt = new Date().toISOString();
+
+				localStorage.setItem(MINI_POS_PASSKEY_KEY, JSON.stringify(saved));
+				refreshLocalPasskeyLoginButton();
+			} catch (e) {
+				console.warn('saveLatestSessionToLocalPasskey:', e);
+			}
+		}
+
+		client.auth.onAuthStateChange((event, session) => {
+			if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
+				saveLatestSessionToLocalPasskey(session);
+			}
+		});
 
 		// Ẩn cứng khi mới mở app, chỉ hiện lại nếu localStorage có dữ liệu vân tay hợp lệ.
 		document.addEventListener('DOMContentLoaded', refreshLocalPasskeyLoginButton);
@@ -3324,7 +3370,7 @@
         }
 
         // --- GENERAL ---
-        function confirmLogout() { showAlert("Đăng xuất", "Bạn chắc chắn muốn thoát phiên làm việc?", 'confirm', forceLogout); }
+        function confirmLogout() { showAlert("Khóa app", "Bạn muốn khóa app và quay về màn hình đăng nhập?", 'confirm', forceLogout); }
         function handleManualInput(e) { 
 			const val = e.target.value.trim(); 
 			
