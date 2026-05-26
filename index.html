@@ -1006,7 +1006,7 @@
         
         const client = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
 			auth: {
-				storage: sessionStorage,
+				storage: localStorage,
 				autoRefreshToken: true,
 				persistSession: true,
 				detectSessionInUrl: true
@@ -1256,13 +1256,41 @@
 				checkSession();
 			}
 		}
+        function clearSupabaseStoredSessionOnly() {
+            // Xóa session Supabase đang đăng nhập khỏi trình duyệt,
+            // nhưng KHÔNG revoke refresh_token đã lưu cho đăng nhập vân tay.
+            // Nếu dùng client.auth.signOut() thì refresh_token có thể bị vô hiệu hóa,
+            // lần sau bấm vân tay sẽ báo "auth session missing".
+            try {
+                Object.keys(localStorage).forEach(function(key) {
+                    if (key.startsWith('sb-') && key.endsWith('-auth-token')) {
+                        localStorage.removeItem(key);
+                    }
+                });
+                Object.keys(sessionStorage).forEach(function(key) {
+                    if (key.startsWith('sb-') && key.endsWith('-auth-token')) {
+                        sessionStorage.removeItem(key);
+                    }
+                });
+            } catch (e) {
+                console.warn('clearSupabaseStoredSessionOnly:', e);
+            }
+        }
+
         async function forceLogout() {
-			await client.auth.signOut();
-			sessionStorage.clear();
-			// Không xóa MINI_POS_LOCAL_PASSKEY để lần sau vẫn có thể mở bằng vân tay nếu token còn hiệu lực.
-			// Muốn xóa hoàn toàn thì dùng nút "Xóa vân tay trên máy này".
-			window.location.reload();
-		}
+            // Nếu đã kích hoạt vân tay thì chỉ "khóa app" cục bộ,
+            // không gọi signOut để tránh làm hỏng refresh_token dùng cho vân tay.
+            if (hasValidLocalPasskeyData()) {
+                clearSupabaseStoredSessionOnly();
+                window.location.reload();
+                return;
+            }
+
+            // Nếu chưa kích hoạt vân tay thì đăng xuất Supabase như bình thường.
+            await client.auth.signOut();
+            sessionStorage.clear();
+            window.location.reload();
+        }
 
 		// ======================= LOCAL PASSKEY UNLOCK (WebAuthn + Supabase session) =======================
 		// Cách này KHÔNG dùng Supabase Passkey beta.
