@@ -1,0 +1,3906 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Mini POS</title>
+    
+	<link rel="manifest" href="manifest.json">
+	<meta name="theme-color" content="#2563eb">
+	<link rel="icon" type="image/x-icon" href="./mini_pos.ico">
+    
+    <link rel="apple-touch-icon" href="./mini_pos.png">
+	<meta name="apple-mobile-web-app-capable" content="yes">
+	<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+	
+	<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+	<script type="module">
+		import { BarcodeDetector } from "https://cdn.jsdelivr.net/npm/barcode-detector@2/dist/es/index.min.js";
+		// Gán vào window để dùng được ở các hàm bên dưới
+		window.BarcodeDetectorPolyfill = BarcodeDetector; 
+	</script>
+	<!--<script src="https://unpkg.com/@zxing/library@latest"></script>-->
+	<script src="https://cdn.jsdelivr.net/npm/easyqrcodejs@4.5.0/dist/easy.qrcode.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f3f4f6; user-select: none; }
+        .hidden { display: none !important; }
+        .scan-success { animation: popIn 0.3s ease-out; }
+        @keyframes popIn { 0% { transform: scale(0.8); opacity: 0; } 100% { transform: scale(1); opacity: 1; } }
+        .modal-overlay { background-color: rgba(0,0,0,0.5); backdrop-filter: blur(2px); }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .history-table th { font-size: 11px; text-transform: uppercase; color: #6b7280; font-weight: 700; padding: 8px; text-align: left; background: #f9fafb; }
+        .history-table td { padding: 8px; font-size: 13px; border-bottom: 1px solid #f3f4f6; color: #374151; }
+        .locked-item { opacity: 0.6; background-color: #f3f4f6; }
+        .locked-item img { filter: grayscale(100%); }
+		
+		/* --- THÊM VÀO CUỐI THẺ STYLE --- */
+		.modal-overlay { z-index: 60 !important; } /* Đảm bảo nó đè lên mọi thứ */
+		.modal-enter { animation: modalSlideIn 0.2s ease-out forwards; }
+		@keyframes modalSlideIn { 
+			from { transform: scale(0.95); opacity: 0; } 
+			to { transform: scale(1); opacity: 1; } 
+		}
+		
+		/* --- SỬA LỖI CAMERA CO GIÃN --- */
+		#reader {
+			width: 100%;
+			height: 100%;
+			overflow: hidden;
+			position: absolute !important; /* <--- Sửa thành absolute để ghim chặt vào khung cha */
+			top: 0;
+			left: 0;
+		}
+
+		#reader video {
+			width: 100% !important;
+			height: 100% !important;
+			object-fit: cover !important; /* Lấp đầy khung, không méo */
+			border-radius: 0 !important;
+		}
+
+		#custom-alert {
+			z-index: 2147483647 !important; /* Số lớn nhất mà trình duyệt hiểu được */
+		}
+		
+		/* --- HIỆU ỨNG GIỎ HÀNG CAO CẤP --- */
+
+		/* 1. Nút rung nhẹ khi chờ thanh toán */
+		@keyframes soft-pulse {
+			0% { box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.4); }
+			70% { box-shadow: 0 0 0 10px rgba(37, 99, 235, 0); }
+			100% { box-shadow: 0 0 0 0 rgba(37, 99, 235, 0); }
+		}
+
+		/* 2. Class kích hoạt hiệu ứng rung */
+		.cart-active-pulse {
+			animation: soft-pulse 2s infinite;
+		}
+
+		/* 3. Hiệu ứng số nảy lên (Pop) khi thêm hàng */
+		.badge-pop {
+			animation: popInBadge 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+		}
+		@keyframes popInBadge {
+			0% { transform: scale(0.8); }
+			50% { transform: scale(1.5); }
+			100% { transform: scale(1); }
+		}
+		
+		/* --- CẤU HÌNH IN HÓA ĐƠN (Đã canh lề chuẩn) --- */
+		@media print {
+			/* 1. Ẩn giao diện web */
+			body > * { display: none !important; }
+			
+			/* 2. Cấu hình khung hóa đơn */
+			#receipt-print-area { 
+				display: block !important; 
+				position: absolute; 
+				left: 0; 
+				top: 0; 
+				width: 100%; 
+				
+				/* --- CANH LỀ TẠI ĐÂY --- */
+				/* Padding: Trên/Dưới 0mm, Trái/Phải 3mm (hoặc 5mm tùy máy) */
+				padding: 0mm 5mm !important; 
+				
+				box-sizing: border-box; /* Giữ kích thước chuẩn không bị vỡ */
+				background: white;
+				color: black;
+				font-family: monospace; /* Font chữ đơn cách cho thẳng hàng số */
+			}
+
+			/* 3. Xóa lề mặc định của trình duyệt để ta tự kiểm soát */
+			@page { 
+				size: auto; 
+				margin: 0mm; /* Quan trọng: Đặt về 0 để không bị trình duyệt tự thêm lề trắng */
+			}
+		}
+
+		/* =========================================
+		   GIAO DIỆN QUÉT MINIMALIST (THEO ẢNH)
+		   ========================================= */
+
+		#scan-focus-box {
+			position: absolute;
+			z-index: 50;
+			pointer-events: none;
+
+			/* Kích thước mặc định */
+			width: 260px;
+			height: 260px;
+
+			/* Căn giữa màn hình */
+			top: 50%;
+			left: 50%;
+			transform: translate(-50%, -50%);
+			
+			/* Hiệu ứng di chuyển mượt */
+			transition: all 0.2s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+			
+			/* Overlay tối xung quanh: Giữ nguyên để làm nổi bật khung trắng */
+			
+		}
+
+		/* --- ĐỊNH DẠNG 4 GÓC (THEO ẢNH MẪU) --- */
+		.border-corner {
+			position: absolute;
+			width: 60px;  /* Độ dài cạnh ngang */
+			height: 60px; /* Độ dài cạnh dọc */
+			
+			/* Màu trắng hơi đục nhẹ cho dịu mắt (giống trong hình chụp qua cam) */
+			border: 6px solid rgba(255, 255, 255, 0.9); 
+			
+			/* Bo góc khung: Tạo cảm giác mềm mại */
+			border-radius: 5px; 
+			
+			/* Đổ bóng nhẹ để nổi bật trên nền sáng */
+			filter: drop-shadow(0 0 4px rgba(0,0,0,0.2));
+		}
+
+		/* --- VỊ TRÍ & CẮT CẠNH TỪNG GÓC --- */
+
+		/* Góc Trái Trên */
+		.tl { 
+			top: 0; left: 0; 
+			border-right: none; 
+			border-bottom: none; 
+			border-top-left-radius: 15px; /* Bo cong nhiều hơn ở đỉnh */
+		}
+
+		/* Góc Phải Trên */
+		.tr { 
+			top: 0; right: 0; 
+			border-left: none; 
+			border-bottom: none; 
+			border-top-right-radius: 15px; 
+		}
+
+		/* Góc Trái Dưới */
+		.bl { 
+			bottom: 0; left: 0; 
+			border-right: none; 
+			border-top: none; 
+			border-bottom-left-radius: 15px; 
+		}
+
+		/* Góc Phải Dưới */
+		.br { 
+			bottom: 0; right: 0; 
+			border-left: none; 
+			border-top: none; 
+			border-bottom-right-radius: 15px; 
+		}
+
+		/* --- HIỆU ỨNG KHI BẮT ĐƯỢC MÃ --- */
+		#scan-focus-box.active-capture {
+			/* Khi bắt được mã, khung co lại một chút và đổi màu xanh nhẹ */
+			transform: translate(-50%, -50%) scale(0.95);
+			box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.6);
+		}
+
+		#scan-focus-box.active-capture .border-corner {
+			border-color: #4ade80; /* Chuyển sang màu xanh lá (Green-400) */
+			transition: border-color 0.2s;
+		}
+	</style>
+</head>
+
+<body class="h-screen overflow-hidden flex flex-col">
+
+    <div id="login-screen" class="fixed inset-0 z-50 bg-gray-100 flex items-center justify-center p-4">
+		<div class="bg-white p-6 rounded-2xl shadow-xl w-full max-w-sm">
+			<div class="text-center mb-6">
+				<div class="">
+					<img src="./mini_pos.png" class="w-16 h-16 bg-blue-600 rounded-2xl mx-auto flex items-center justify-center shadow-lg mb-3">
+				</div>
+				<h1 class="text-2xl font-bold text-gray-800">Mini POS</h1>
+				<p class="text-gray-400 text-sm">Hệ thống hỗ trợ bán hàng</p>
+			</div>
+			
+			<div class="space-y-4">
+				<div>
+					<label class="block text-xs font-bold text-gray-500 mb-1">Email</label>
+					<!--<input type="email" id="email" class="w-full border border-gray-300 p-3 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all" placeholder="name@example.com">-->
+					<input 
+						type="email" 
+						id="email" 
+						class="w-full border border-gray-300 p-3 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all" 
+						placeholder="name@example.com"
+						enterkeyhint="next"
+						onkeyup="if(event.key === 'Enter') document.getElementById('password').focus()"
+					>
+				</div>
+				<div>
+					<label class="block text-xs font-bold text-gray-500 mb-1">Mật khẩu</label>
+					<!--<input type="password" id="password" class="w-full border border-gray-300 p-3 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all" placeholder="••••••••">-->
+					<input 
+						type="password" 
+						id="password" 
+						class="w-full border border-gray-300 p-3 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all" 
+						placeholder="••••••••"
+						enterkeyhint="go"
+						onkeyup="handleLoginKey(event)"
+					>
+				</div>
+				
+				<div id="login-msg" class="text-center text-red-500 text-xs font-bold min-h-[20px]"></div>
+				
+				<button onclick="handleLogin()" class="w-full bg-blue-600 text-white py-3.5 rounded-xl font-bold shadow-lg active:scale-95 transition-transform">ĐĂNG NHẬP</button>
+				
+				<div class="relative flex py-2 items-center">
+					<div class="flex-grow border-t border-gray-200"></div>
+					<span class="flex-shrink-0 mx-4 text-gray-400 text-xs">Hoặc</span>
+					<div class="flex-grow border-t border-gray-200"></div>
+				</div>
+				
+				<button onclick="loginWithLocalPasskey()" class="w-full bg-slate-800 text-white py-3 rounded-xl font-bold shadow-sm active:scale-95 transition-transform flex items-center justify-center gap-2">
+					👆 Đăng nhập bằng vân tay / Passkey
+				</button>
+
+				<button onclick="startLoginScanner()" class="w-full bg-white text-gray-700 border border-gray-300 py-3 rounded-xl font-bold shadow-sm active:scale-95 transition-transform flex items-center justify-center gap-2">
+					<i class="fas fa-qrcode"></i> Quét mã QR đăng nhập
+				</button>
+			</div>
+		</div>
+
+		<div id="login-scanner-overlay" class="hidden fixed inset-0 bg-black bg-opacity-90 z-[60] flex flex-col items-center justify-center">
+			<p class="text-white font-bold mb-4 text-lg">Đưa mã QR vào khung</p>
+			
+			<div class="relative w-80 h-80 border-4 border-blue-500 rounded-2xl overflow-hidden shadow-2xl bg-black">
+				<div id="reader-login" class="w-full h-full"></div>
+			</div>
+
+			<button onclick="stopLoginScanner()" class="mt-8 bg-white text-red-600 px-6 py-2 rounded-full font-bold shadow-lg">Đóng Camera</button>
+		</div>
+	</div>
+
+    <div id="scan-screen" class="flex-1 flex flex-col hidden bg-gray-100">
+        <div class="bg-white p-3 flex justify-between items-center shadow-sm z-20 sticky top-0">
+            <div class="flex flex-col">
+                <span id="user-email" class="text-xs font-bold text-gray-400 uppercase">Staff</span>
+                <div class="flex items-center gap-2"><span class="text-lg font-bold text-gray-800">Bán Hàng</span><span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span></div>
+            </div>
+            
+        </div>
+
+		<div class="bg-white px-3 py-2 border-b shadow-sm z-20 sticky top-0">
+			<div class="flex gap-3 overflow-x-auto no-scrollbar pb-1">
+				<button onclick="toggleCheckPriceMode()" class="flex items-center gap-2 bg-teal-50 text-teal-700 px-4 py-2 rounded-full border border-teal-100 font-bold text-xs whitespace-nowrap active:scale-95 transition-transform shrink-0">
+					<span>🔍</span> <span>Kiểm tra giá</span>
+				</button>
+
+				<button onclick="showRecallModal()" class="flex items-center gap-2 bg-orange-50 text-orange-600 px-4 py-2 rounded-full border border-orange-100 font-bold text-xs whitespace-nowrap active:scale-95 transition-transform shrink-0 relative">
+					<span id="parked-count" class="hidden absolute -top-1 -right-1 bg-red-500 text-white text-[9px] w-4 h-4 rounded-full flex items-center justify-center border border-white">0</span>
+					<span>🛑 Giao dịch chờ</span>
+				</button>
+
+				<button onclick="openHistory()" class="flex items-center gap-2 bg-blue-50 text-blue-600 px-4 py-2 rounded-full border border-blue-100 font-bold text-xs whitespace-nowrap active:scale-95 transition-transform shrink-0">
+					<span>🕒 Lịch sử giao dịch</span>
+				</button>
+				
+				<button id="btn-open-admin" onclick="openAdminScreen()" class="hidden flex items-center gap-2 bg-purple-50 text-purple-600 px-4 py-2 rounded-full border border-purple-100 font-bold text-xs whitespace-nowrap active:scale-95 transition-transform shrink-0">
+					<span>⚙️ Quản lý</span>
+				</button>
+				
+				<button onclick="confirmLogout()" class="flex items-center gap-2 bg-gray-100 text-gray-600 px-4 py-2 rounded-full border border-gray-200 font-bold text-xs whitespace-nowrap active:scale-95 transition-transform shrink-0">
+					<span>🚪 Đăng xuất</span>
+				</button>
+			</div>
+		</div>
+
+        <div class="relative bg-black flex-1 flex flex-col items-center justify-center overflow-hidden group w-full">
+    
+			<div id="reader" class="w-full h-full absolute inset-0 z-0 bg-black overflow-hidden">
+				<video id="scan-video" class="w-full h-full object-cover" autoplay playsinline muted></video>
+				<canvas id="scan-canvas" class="absolute inset-0 w-full h-full pointer-events-none opacity-0"></canvas>
+			</div>
+
+			<div id="scan-focus-box" class="idle-state hidden">
+				<div class="border-corner tl"></div>
+				<div class="border-corner tr"></div>
+				<div class="border-corner bl"></div>
+				<div class="border-corner br"></div>
+				<div class="scan-laser"></div>
+				<div class="scan-crosshair"></div>
+			</div>
+
+			<button id="btn-stop-cam" onclick="stopScanner()" class="hidden absolute top-4 right-4 z-40 bg-black/50 text-white p-2 rounded-full border border-white/30 backdrop-blur-md hover:bg-red-600 transition">
+				<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+			</button>
+			
+			<div id="multiplier-badge" 
+				 class="hidden absolute top-10 inset-x-0 mx-auto w-fit z-30 bg-red-600 text-white px-4 py-1 rounded-full font-bold shadow-lg border border-white animate-bounce">
+				Số lượng: x<span id="multiplier-val">1</span><span> Sản phẩm</span>
+			</div>
+
+			<div id="scan-focus-box" class="idle-state hidden">
+				<div class="border-corner tl"></div>
+				<div class="border-corner tr"></div>
+				<div class="border-corner bl"></div>
+				<div class="border-corner br"></div>
+			</div>
+
+			<div id="camera-placeholder" class="z-20 text-center absolute">
+				<button onclick="startScanner()" class="bg-white/20 backdrop-blur-md border border-white/40 text-white px-8 py-4 rounded-full font-bold shadow-lg flex items-center gap-2 hover:bg-white/30 transition">
+					📷 BẬT CAMERA
+				</button>
+			</div>
+		</div>
+
+        <div class="sticky bottom-0 z-50 bg-white border-t rounded-t-3xl shadow-[0_-5px_20px_rgba(0,0,0,0.1)] -mt-6 pb-[env(safe-area-inset-bottom)] overflow-hidden transition-all duration-300">
+    
+			<div id="sales-panel" class="block">
+				<div class="p-4 pb-2">
+					<div class="mb-3 flex gap-2 items-center">
+						
+						<button onclick="openScanSettings()" class="w-12 h-12 rounded-xl bg-gray-200 text-gray-600 flex items-center justify-center text-xl shadow-sm active:scale-95 transition-transform shrink-0">
+							⚙️
+						</button>
+
+						<div class="relative flex-1 group">
+							<input 
+								type="tel" 
+								id="manual-input" 
+								placeholder="Nhập mã..." 
+								class="w-full bg-gray-100 p-3.5 pl-10 rounded-xl text-lg font-semibold outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 transition-all shadow-inner" 
+								onkeyup="handleManualInput(event)"
+								enterkeyhint="search"
+								autocomplete="off"
+							>
+							<span class="absolute left-3 top-4 text-gray-400">⌨️</span>
+						</div>
+
+						<div id="scan-buttons-container" class="flex gap-1 shrink-0"></div>
+					</div>
+					
+					<div id="last-scanned-card" class="bg-emerald-50 p-3 rounded-2xl border border-emerald-100 flex items-center justify-between hidden scan-success mb-3 shadow-sm">
+						<div>
+							<h3 id="last-item-name" class="font-bold text-gray-800 line-clamp-1">...</h3>
+							<div id="last-item-info" class="text-[11px] text-gray-500 font-semibold mb-1">...</div>
+							<div id="last-item-price-container"></div>
+						</div>
+						<div class="bg-white px-3 py-1 rounded-xl border border-emerald-200 shadow-sm"><span id="last-item-qty" class="text-xl font-bold text-emerald-600">+1</span></div>
+					</div>
+
+					<div class="grid grid-cols-2 gap-3">
+						<button onclick="voidTransaction()" class="bg-red-50 text-red-600 py-3.5 rounded-xl font-bold text-xs hover:bg-red-100 transition-colors">🗑 HỦY GIAO DỊCH</button>
+						<button onclick="parkOrder()" class="bg-orange-50 text-orange-600 py-3.5 rounded-xl font-bold text-xs hover:bg-orange-100 transition-colors">⏸ HOÃN GIAO DỊCH</button>
+					</div>
+				</div>
+
+				<div class="px-4 pb-4 pt-2">
+					<button id="btn-cart-payment" onclick="goToPayment()" class="w-full bg-gray-200 text-gray-400 p-4 rounded-2xl font-bold text-xl shadow-none flex justify-between items-center active:scale-[0.98] transition-all duration-300 group pointer-events-none">
+						<div class="flex items-center gap-3">
+							<span class="bg-black/10 px-3 py-1 rounded-lg text-sm backdrop-blur-md" id="quick-count">0</span>
+							<span class="text-sm font-normal opacity-90">Giỏ hàng</span>
+						</div>
+						<span id="quick-total">0đ &rarr;</span>
+					</button>
+				</div>
+			</div>
+
+			<div id="check-price-panel" class="hidden bg-teal-50 h-full flex flex-col">
+				
+				<div class="px-4 py-3 bg-teal-600 text-white flex justify-between items-center shadow-md shrink-0">
+					<div class="flex items-center gap-2">
+						<span class="text-2xl animate-bounce">🔍</span>
+						<div>
+							<h3 class="font-bold text-lg leading-none">Chế độ Xem Giá</h3>
+							<p class="text-[10px] opacity-80">Quét mã để xem, không thêm vào giỏ</p>
+						</div>
+					</div>
+					<button onclick="toggleCheckPriceMode()" class="bg-white/20 hover:bg-white/30 px-3 py-1.5 rounded-lg text-xs font-bold border border-white/30">Đóng</button>
+				</div>
+
+				<div class="p-4 flex-1 flex flex-col gap-3">
+					<div class="flex gap-2 items-center">
+						<button onclick="openScanSettings()" class="w-12 h-12 rounded-xl bg-teal-100 text-teal-600 flex items-center justify-center text-xl shadow-sm active:scale-95 transition-transform shrink-0 border border-teal-200">
+							⚙️
+						</button>
+
+						<div class="relative flex-1 group">
+							<input 
+								type="tel" 
+								id="check-price-input" 
+								placeholder="Quét hoặc nhập mã..." 
+								class="w-full bg-white border-2 border-teal-200 p-3.5 pl-10 rounded-xl text-lg font-bold outline-none focus:border-teal-500 text-teal-800 transition-all shadow-inner" 
+								onkeyup="handleCheckPriceManual(event)"
+								enterkeyhint="search"
+								autocomplete="off"
+							>
+							<span class="absolute left-3 top-4 text-teal-300">🔎</span>
+						</div>
+
+						<div id="scan-buttons-container-check" class="flex gap-1 shrink-0"></div>
+					</div>
+
+					<div id="check-result-container" class="bg-white rounded-2xl border border-teal-100 shadow-sm flex-1 flex flex-col items-center justify-center p-4 text-center min-h-[160px]">
+						<div class="opacity-50 grayscale">
+							<div class="text-5xl mb-2">🏷️</div>
+							<p class="text-gray-400 text-sm">Mời quét sản phẩm...</p>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+    </div>
+
+    <div id="admin-screen" class="hidden fixed inset-0 z-40 bg-gray-50 flex flex-col h-full animate-fade-in">
+        <div class="bg-white p-4 shadow-md flex justify-between items-center z-10 sticky top-0">
+            <div class="flex items-center gap-2">
+				<!--<button onclick="closeAdminScreen()" class="p-2 -ml-2 hover:bg-gray-100 rounded-full">⬅</button>-->
+				<button onclick="closeAdminScreen()" class="group w-10 h-10 flex items-center justify-center rounded-full bg-white border border-gray-200 shadow-sm text-gray-500 hover:text-blue-600 hover:border-blue-200 active:scale-95 transition-all -ml-1 mr-2">
+					<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor" class="w-5 h-5 group-hover:-translate-x-0.5 transition-transform">
+						<path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
+					</svg>
+				</button>
+				<h2 class="font-bold text-xl text-gray-800">Quản Lý</h2>
+			</div>
+            <button onclick="forceLogout()" class="text-xs text-red-500 border border-red-200 px-2 py-1 rounded">Đăng xuất</button>
+        </div>
+        <div class="p-3 bg-white border-b flex gap-2">
+            <button onclick="switchAdminTab('products')" id="tab-products" class="flex-1 py-2.5 rounded-lg font-bold bg-blue-600 text-white">📦 Hàng hóa</button>
+            <button onclick="switchAdminTab('revenue')" id="tab-revenue" class="flex-1 py-2.5 rounded-lg font-bold bg-white text-gray-500 border">💰 Doanh thu</button>
+			<button onclick="switchAdminTab('users')" id="tab-users" class="flex-1 py-2.5 rounded-lg font-bold bg-white text-gray-500 border">👥 Nhân viên</button>
+			<button onclick="switchAdminTab('system')" id="tab-system" class="flex-1 py-2.5 rounded-lg font-bold bg-white text-gray-500 border">🔧 Hệ thống</button>
+        </div>
+        
+        <div id="admin-products" class="flex-1 flex flex-col overflow-hidden">
+            <div class="p-3 bg-white flex flex-col gap-2 border-b">
+                <div class="flex gap-2">
+                    <input type="text" placeholder="Tìm tên, mã..." class="flex-1 bg-gray-100 p-2.5 rounded-lg outline-none" oninput="renderProductList(this.value)">
+                    <button onclick="openProductModal()" class="bg-green-600 text-white px-4 rounded-lg font-bold">+</button>
+                </div>
+                <div class="flex gap-2 justify-end">
+					<button onclick="deleteAllProducts()" class="bg-red-100 text-red-700 px-3 py-1 rounded text-xs font-bold border border-red-200 hover:bg-red-200 mr-auto">🗑️ Xóa tất cả</button>
+                    <button onclick="downloadTemplate()" class="text-xs text-blue-600 underline">⬇️ Tải mẫu Excel</button>
+                    <label class="bg-green-100 text-green-700 px-3 py-1 rounded text-xs font-bold cursor-pointer border border-green-200 hover:bg-green-200 flex items-center gap-1">
+                        <span>📥 Nhập Excel</span>
+                        <input type="file" id="excel-upload" class="hidden" accept=".xlsx, .xls" onchange="handleExcelUpload(event)">
+                    </label>
+                </div>
+            </div>
+            <div id="admin-product-list" class="flex-1 overflow-y-auto p-3 space-y-2 pb-20"></div>
+        </div>
+
+        <div id="admin-revenue" class="hidden flex-1 flex flex-col overflow-hidden bg-gray-50 h-full">
+    
+			<div id="revenue-classic-ui" class="flex flex-col h-full">
+				<div class="p-4 grid grid-cols-2 gap-3 shrink-0">
+					<div class="bg-white p-4 rounded-2xl shadow-sm border border-indigo-50">
+						<p class="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Hôm nay</p>
+						<p class="text-xl font-bold text-indigo-700 mt-1 font-display truncate" id="rev-today">0đ</p>
+						<p id="order-count-today" class="text-[10px] text-indigo-400 mt-1 font-medium">0 đơn</p>
+					</div>
+					<div class="bg-white p-4 rounded-2xl shadow-sm border border-purple-50">
+						<p class="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Tháng này</p>
+						<p class="text-xl font-bold text-purple-700 mt-1 font-display truncate" id="rev-month">0đ</p>
+						<p id="order-count-month" class="text-[10px] text-purple-400 mt-1 font-medium">0 đơn</p>
+					</div>
+				</div>
+
+				<div class="flex-1 bg-white rounded-t-3xl shadow-[0_-5px_20px_rgba(0,0,0,0.05)] flex flex-col overflow-hidden border-t border-gray-100 mx-2">
+					<div class="p-4 border-b border-gray-100 z-10 bg-white">
+						<div class="flex items-center justify-between mb-3">
+							<h3 class="text-sm font-bold text-gray-800 flex items-center gap-2">📊 Chi tiết doanh số</h3>
+							<button onclick="loadRevenue(); viewRevenueDetail();" class="text-[10px] bg-gray-100 px-2 py-1 rounded text-gray-500 hover:bg-gray-200">🔄 Làm mới</button>
+						</div>
+						
+						<div class="flex gap-2 mb-3">
+							<div class="flex-1">
+								<label class="text-[9px] font-bold text-gray-400 block mb-1 uppercase">Từ ngày</label>
+								<input type="date" id="filter-start" class="w-full bg-gray-50 border border-gray-200 rounded-lg p-2 text-xs font-bold text-gray-700 outline-none focus:ring-1 focus:ring-indigo-500">
+							</div>
+							<div class="flex-1">
+								<label class="text-[9px] font-bold text-gray-400 block mb-1 uppercase">Đến ngày</label>
+								<input type="date" id="filter-end" class="w-full bg-gray-50 border border-gray-200 rounded-lg p-2 text-xs font-bold text-gray-700 outline-none focus:ring-1 focus:ring-indigo-500">
+							</div>
+							<div class="flex items-end">
+								<button onclick="viewRevenueDetail()" class="bg-indigo-600 text-white w-9 h-9 rounded-lg flex items-center justify-center shadow-md active:bg-indigo-700 transition-transform">🔍</button>
+							</div>
+						</div>
+
+						<div class="flex justify-between items-center bg-indigo-50 p-2.5 rounded-xl border border-indigo-100">
+							<span class="text-xs text-indigo-600 font-bold" id="filter-count">0 đơn hàng</span>
+							<span class="text-base font-bold text-indigo-700 font-display" id="filter-sum">0đ</span>
+						</div>
+						
+						<button onclick="exportRevenueReport()" class="w-full mt-2 text-[10px] text-emerald-600 font-bold border border-emerald-200 bg-emerald-50 py-2 rounded-lg hover:bg-emerald-100">📥 Xuất Excel</button>
+					</div>
+
+					<div id="revenue-list" class="flex-1 overflow-y-auto p-3 space-y-2 bg-gray-50 pb-20"></div>
+				</div>
+			</div> 
+			<div id="revenue-chart-ui" class="flex flex-col h-full hidden overflow-y-auto p-4 space-y-4 pb-20">
+				<div class="flex justify-between items-center">
+					<h3 class="font-bold text-gray-800 text-lg">Tổng Quan 📊</h3>
+					<button onclick="renderCharts()" class="text-xs bg-white border px-3 py-1.5 rounded-lg shadow-sm font-bold text-indigo-600">🔄 Làm mới</button>
+				</div>
+
+				<div class="bg-white p-4 rounded-2xl shadow-sm border border-gray-100">
+					<h4 class="text-xs font-bold text-gray-400 uppercase mb-4">Doanh thu 7 ngày qua</h4>
+					<div class="h-48 relative w-full">
+						<canvas id="chart-revenue-7days"></canvas>
+					</div>
+				</div>
+
+				<div class="bg-white p-4 rounded-2xl shadow-sm border border-gray-100">
+					<h4 class="text-xs font-bold text-gray-400 uppercase mb-4">Top 5 Sản phẩm bán chạy</h4>
+					<div class="h-48 relative w-full flex justify-center">
+						<canvas id="chart-top-products"></canvas>
+					</div>
+				</div>
+				
+				<button onclick="forceSwitchToClassic()" class="w-full bg-indigo-50 text-indigo-600 py-3 rounded-xl font-bold border border-indigo-100 text-sm">
+					📄 Xem danh sách chi tiết
+				</button>
+			</div>
+		</div>
+		
+		<div id="admin-users" class="hidden flex-1 flex flex-col overflow-hidden bg-gray-50 h-full">
+			<div class="p-3 bg-white border-b shadow-sm">
+				<h3 class="font-bold text-gray-700">Danh sách tài khoản</h3>
+				<p class="text-[10px] text-gray-400">Trạng thái cập nhật mỗi 30 giây</p>
+			</div>
+			<div id="user-list" class="flex-1 overflow-y-auto p-3 space-y-2 pb-20">
+				</div>
+		</div>
+		
+		<div id="admin-system" class="hidden flex-1 flex flex-col bg-gray-50 h-full p-4 space-y-4 overflow-y-auto pb-20">
+			<div class="bg-white p-5 rounded-xl shadow-sm border border-gray-200">
+				<div class="flex justify-between items-center mb-4">
+					<div>
+						<h3 class="font-bold text-gray-800 text-lg">Giao diện Biểu đồ 📊</h3>
+						<p class="text-xs text-gray-500">Bật: Hiện biểu đồ. Tắt: Hiện số liệu cũ.</p>
+					</div>
+					<label class="relative inline-flex items-center cursor-pointer">
+						<input type="checkbox" id="sys-chart-toggle" class="sr-only peer">
+						<div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+					</label>
+				</div>
+			
+				<div class="flex justify-between items-center mb-4">
+					<div>
+						<h3 class="font-bold text-gray-800 text-lg">Chế độ Bảo trì 🚧</h3>
+						<p class="text-xs text-gray-500">Khi bật, chỉ Admin mới có thể đăng nhập.</p>
+					</div>
+					<label class="relative inline-flex items-center cursor-pointer">
+						<input type="checkbox" id="sys-maintenance-toggle" class="sr-only peer">
+						<div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-red-600"></div>
+					</label>
+				</div>
+
+				<div class="space-y-2 mb-4">
+					<label class="text-xs font-bold text-gray-500 uppercase">Thông báo bảo trì</label>
+					<textarea id="sys-message" rows="2" class="w-full p-3 border rounded-lg bg-gray-50 focus:ring-1 focus:ring-blue-500 outline-none" placeholder="Nhập lời nhắn cho nhân viên..."></textarea>
+				</div>
+
+				<div class="flex justify-between items-center mb-4">
+					<div>
+						<h3 class="font-bold text-gray-800 text-lg">Cho phép In hóa đơn 🖨️</h3>
+						<p class="text-xs text-gray-500">Hỏi "In hóa đơn?" sau khi thanh toán.</p>
+					</div>
+					<label class="relative inline-flex items-center cursor-pointer">
+						<input type="checkbox" id="sys-print-toggle" class="sr-only peer">
+						<div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-green-600"></div>
+					</label>
+				</div>
+
+				<div class="border-t my-4 pt-4">
+					<h3 class="font-bold text-gray-800 text-lg mb-3">Thông tin trên Hóa đơn 🧾</h3>
+					
+					<div class="space-y-3">
+						<div>
+							<label class="text-xs font-bold text-gray-500 uppercase">Tên Cửa Hàng</label>
+							<input type="text" id="sys-store-name" class="w-full p-3 border rounded-lg bg-gray-50 focus:ring-1 focus:ring-blue-500 outline-none font-bold" placeholder="VD: Tạp Hóa Cô Ba">
+						</div>
+						
+						<div>
+							<label class="text-xs font-bold text-gray-500 uppercase">Địa chỉ</label>
+							<input type="text" id="sys-store-address" class="w-full p-3 border rounded-lg bg-gray-50 focus:ring-1 focus:ring-blue-500 outline-none" placeholder="VD: 123 Đường ABC, Quận 1">
+						</div>
+
+						<div class="mt-3">
+							<label class="text-xs font-bold text-gray-500 uppercase">Hotline / SĐT</label>
+							<input type="text" id="sys-store-hotline" class="w-full p-3 border rounded-lg bg-gray-50 focus:ring-1 focus:ring-blue-500 outline-none font-bold" placeholder="VD: Hotline: 0909.999.888">
+						</div>
+
+						<div class="grid grid-cols-2 gap-3">
+							<div>
+								<label class="text-xs font-bold text-gray-500 uppercase">Lời chào cuối</label>
+								<input type="text" id="sys-footer" class="w-full p-3 border rounded-lg bg-gray-50 focus:ring-1 focus:ring-blue-500 outline-none" placeholder="Cảm ơn & Hẹn gặp lại!">
+							</div>
+							<div>
+								<label class="text-xs font-bold text-gray-500 uppercase">Thông tin Wifi</label>
+								<input type="text" id="sys-wifi" class="w-full p-3 border rounded-lg bg-gray-50 focus:ring-1 focus:ring-blue-500 outline-none" placeholder="Wifi: ... / Pass: ...">
+							</div>
+						</div>
+					</div>
+				</div>
+
+				<button onclick="saveSystemSettings()" class="mt-4 w-full bg-blue-600 text-white py-3 rounded-xl font-bold shadow-lg active:scale-95 transition-transform">LƯU CÀI ĐẶT</button>
+			</div>
+		</div>
+    </div>
+
+    <div id="payment-screen" class="hidden h-dvh w-full flex flex-col bg-gray-50 absolute inset-0 z-50">
+        <div class="bg-white p-4 shadow-sm flex items-center gap-3 sticky top-0 z-20">
+            <button onclick="backToScan()" class="group w-10 h-10 flex items-center justify-center rounded-full bg-white border border-gray-200 shadow-sm text-gray-500 hover:text-blue-600 hover:border-blue-200 active:scale-95 transition-all -ml-1 mr-2">
+				<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor" class="w-5 h-5 group-hover:-translate-x-0.5 transition-transform">
+					<path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
+				</svg>
+			</button>
+            <h2 class="font-bold text-lg">Thanh toán</h2>
+        </div>
+        <div class="flex-1 overflow-y-auto p-4 space-y-3 pb-40" id="cart-list"></div>
+        <div class="sticky bottom-0 z-30 bg-white p-5 border-t rounded-t-3xl shadow-[0_-5px_20px_rgba(0,0,0,0.05)] pb-[env(safe-area-inset-bottom)]">
+			<div class="flex flex-col items-center justify-center mb-6 border-b border-dashed pb-6">
+				<span class="text-gray-400 font-bold text-xs uppercase tracking-widest mb-1">Tổng tiền cần thu</span>
+				<span id="final-total" class="text-5xl font-bold text-blue-600 tracking-tight">0đ</span>
+			</div>
+			<div class="mb-4">
+				<div class="flex justify-between mb-1">
+					<label class="text-xs font-bold text-gray-400 uppercase">Khách đưa</label>
+					<button onclick="setExactMoney()" class="text-xs text-blue-600 font-bold bg-blue-50 px-2 py-1 rounded">Nhập đúng số tiền</button>
+				</div>
+				<div class="relative">
+					<input 
+						type="number" 
+						id="money-received" 
+						placeholder="0" 
+						class="w-full bg-gray-100 p-3 pr-12 rounded-xl text-xl font-bold text-gray-800 outline-none focus:ring-2 focus:ring-blue-500 transition-all" 
+						oninput="calculateChange()"
+					>
+					
+					<button 
+						id="btn-clear-money"
+						onclick="clearMoneyInput()" 
+						class="hidden absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 p-2 rounded-full hover:bg-gray-200 transition-colors"
+						tabindex="-1"
+					>
+						<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+							<path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd" />
+						</svg>
+					</button>
+				</div>
+				<div class="flex gap-2 mt-2 overflow-x-auto pb-1 no-scrollbar">
+					<button onclick="addMoney(500000)" class="bg-green-50 text-green-700 border border-green-200 px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap active:bg-green-100">+500k</button>
+					<button onclick="addMoney(200000)" class="bg-green-50 text-green-700 border border-green-200 px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap active:bg-green-100">+200k</button>
+					<button onclick="addMoney(100000)" class="bg-green-50 text-green-700 border border-green-200 px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap active:bg-green-100">+100k</button>
+					<button onclick="addMoney(50000)" class="bg-green-50 text-green-700 border border-green-200 px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap active:bg-green-100">+50k</button>
+				</div>
+			</div>
+			<div class="flex justify-between items-center bg-orange-50 p-3 rounded-xl border border-orange-100 mb-4">
+				<span class="text-orange-800 font-bold text-sm">Tiền thừa:</span>
+				<span id="change-amount" class="text-2xl font-bold text-orange-600">0đ</span>
+			</div>
+			
+			<button onclick="processPayment()" 
+				id="btn-confirm-pay" 
+				class="w-full bg-gray-200 text-gray-400 p-4 rounded-xl font-bold text-lg shadow-none transition-all duration-300 flex justify-center items-center gap-2 group">
+				XÁC NHẬN THANH TOÁN
+			</button>
+		</div>
+    </div>
+
+    <div id="history-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center modal-overlay p-4">
+		<div class="bg-white rounded-xl shadow-2xl w-full max-w-lg h-[85vh] flex flex-col overflow-hidden">
+			<div class="p-4 border-b flex justify-between items-center bg-gray-50">
+				<h3 class="font-bold text-gray-800">Lịch sử giao dịch</h3>
+				<button onclick="document.getElementById('history-modal').classList.add('hidden'); document.getElementById('history-detail-panel').classList.add('hidden')" class="text-2xl text-gray-400">×</button>
+			</div>
+			<div id="history-list" class="flex-1 overflow-y-auto p-2 space-y-2 bg-gray-100"></div>
+		</div>
+	</div>
+
+	<div id="history-detail-panel" class="hidden fixed bottom-0 left-0 w-full h-[70vh] bg-white rounded-t-2xl shadow-[0_-10px_40px_rgba(0,0,0,0.2)] flex flex-col z-[60] transition-transform duration-300">
+		<div class="p-4 border-b flex justify-between items-center bg-blue-600 text-white rounded-t-2xl">
+			<div>
+				<h4 class="font-bold text-lg" id="hist-detail-id">#Order</h4>
+				<p class="text-xs opacity-80" id="hist-detail-time">...</p>
+			</div>
+			<button onclick="document.getElementById('history-detail-panel').classList.add('hidden')" class="bg-white/20 hover:bg-white/30 p-2 rounded-full">▼</button>
+		</div>
+		
+		<div class="flex-1 overflow-y-auto p-0">
+			<table class="w-full history-table table-fixed"> <thead>
+					<tr class="text-gray-500 border-b">
+						<th class="w-[45%] text-left py-2 font-bold">Tên SP / Mã</th>
+						
+						<th class="w-[10%] text-right py-2 font-bold">SL</th>
+						
+						<th class="w-[20%] text-right py-2 font-bold">Giá</th>
+						
+						<th class="w-[25%] text-right py-2 font-bold">Tổng</th>
+					</tr>
+				</thead>
+				<tbody id="hist-detail-items"></tbody>
+			</table>
+		</div>
+		
+		<div id="hist-detail-footer" class="p-4 bg-gray-50 border-t space-y-2"></div>
+    </div>
+
+    <div id="recall-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center modal-overlay p-4">
+        <div class="bg-white rounded-xl shadow-2xl w-full max-w-md max-h-[80vh] flex flex-col">
+            <div class="p-4 border-b flex justify-between items-center bg-orange-50 rounded-t-xl"><h3 class="font-bold text-orange-800">Giao dịch chờ</h3><button onclick="document.getElementById('recall-modal').classList.add('hidden')" class="text-2xl text-gray-400">×</button></div>
+            <div id="parked-list" class="flex-1 overflow-y-auto p-4 space-y-3"></div>
+        </div>
+    </div>
+
+    <div id="product-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center modal-overlay p-4">
+        <div class="bg-white rounded-xl shadow-2xl w-full max-w-sm flex flex-col max-h-[90vh]">
+            <div class="p-4 border-b font-bold text-lg">Thông tin sản phẩm</div>
+            <div class="p-4 overflow-y-auto space-y-3">
+				<input type="hidden" id="prod-id">
+				
+				<div>
+					<label class="text-xs font-bold text-gray-500">Tên SP *</label>
+					<input type="text" id="prod-name" class="w-full border p-2 rounded focus:ring-1 focus:ring-blue-500">
+				</div>
+
+				<div class="grid grid-cols-2 gap-2">
+					<div><label class="text-xs font-bold text-gray-500">Mã vạch</label><input type="text" id="prod-barcode" class="w-full border p-2 rounded"></div>
+					<div><label class="text-xs font-bold text-blue-600">Mã Item</label><input type="text" id="prod-itemcode" class="w-full border p-2 rounded border-blue-200 bg-blue-50"></div>
+				</div>
+
+				<div class="grid grid-cols-2 gap-2">
+					<div><label class="text-xs font-bold text-gray-500">Đơn vị tính</label><input type="text" id="prod-unit" class="w-full border p-2 rounded"></div>
+					<div>
+						<label class="text-xs font-bold text-purple-600">Tồn kho 📦</label>
+						<input type="number" id="prod-quantity" class="w-full border-2 border-purple-200 bg-purple-50 p-2 rounded font-bold text-purple-700">
+					</div>
+				</div>
+
+				<div class="grid grid-cols-2 gap-2">
+					<div><label class="text-xs font-bold text-gray-500">Giá bán *</label><input type="number" id="prod-price" class="w-full border p-2 rounded"></div>
+					<div><label class="text-xs font-bold text-red-500">Giá KM</label><input type="number" id="prod-sale" class="w-full border p-2 rounded bg-red-50"></div>
+				</div>
+				
+				<div><label class="text-xs font-bold text-gray-500">Link Ảnh</label><input type="text" id="prod-image" class="w-full border p-2 rounded"></div>
+			</div>
+            <div class="p-4 border-t grid grid-cols-2 gap-3"><button onclick="document.getElementById('product-modal').classList.add('hidden')" class="bg-gray-100 text-gray-600 py-2 rounded font-bold">Hủy</button><button onclick="saveProduct()" class="bg-blue-600 text-white py-2 rounded font-bold">Lưu</button></div>
+        </div>
+    </div>
+	
+	<div id="custom-alert" class="hidden fixed inset-0 flex items-center justify-center modal-overlay p-4">
+		<div class="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden modal-enter flex flex-col">
+			<div id="alert-header" class="p-6 pb-2 text-center">
+				<div id="alert-icon" class="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 text-3xl bg-blue-50 text-blue-600">ℹ️</div>
+				<h3 id="alert-title" class="text-xl font-bold text-gray-800">Thông báo</h3>
+			</div>
+			<div class="px-6 pb-6 text-center"><p id="alert-msg" class="text-gray-500">Nội dung...</p></div>
+			<div class="grid grid-cols-2 gap-0 border-t bg-gray-50" id="alert-actions"></div>
+		</div>
+	</div>
+
+	<div id="qr-modal" class="hidden fixed inset-0 z-[70] bg-black bg-opacity-60 flex items-center justify-center p-4 backdrop-blur-sm transition-opacity">
+		<div class="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-sm flex flex-col items-center relative animate-popIn">
+			
+			<button onclick="closeQRModal()" class="absolute top-3 right-3 text-gray-400 hover:text-gray-600 bg-gray-100 rounded-full w-8 h-8 flex items-center justify-center transition">
+				✕
+			</button>
+
+			<h3 class="font-bold text-xl text-gray-800 mb-1">Thẻ Nhân Viên</h3>
+			<p class="text-xs text-gray-400 mb-6">Dùng để đăng nhập nhanh</p>
+
+			<div class="bg-white p-3 border-2 border-dashed border-gray-300 rounded-xl mb-4">
+				<div id="qr-code-container"></div>
+			</div>
+
+			<div class="text-center mb-6">
+				<p class="text-xs font-bold text-gray-500 uppercase tracking-wider">Tài khoản</p>
+				<p id="qr-user-email" class="font-bold text-blue-600 text-lg"></p>
+			</div>
+
+			<div class="flex gap-2 w-full">
+				<button onclick="downloadQR()" class="flex-1 bg-blue-600 text-white py-3 rounded-xl font-bold shadow-lg active:scale-95 transition-transform flex items-center justify-center gap-1">
+					⬇️ Lưu
+				</button>
+
+				<button onclick="printQR()" class="flex-1 bg-gray-800 text-white py-3 rounded-xl font-bold shadow-lg active:scale-95 transition-transform flex items-center justify-center gap-1">
+					🖨️ In
+				</button>
+				
+				<button onclick="closeQRModal()" class="flex-1 bg-gray-100 text-gray-600 py-3 rounded-xl font-bold active:scale-95 transition-transform">
+					Đóng
+				</button>
+			</div>
+		</div>
+	</div>
+
+	<div id="password-input-modal" class="hidden fixed inset-0 z-[9999] bg-black bg-opacity-60 flex items-center justify-center p-4 backdrop-blur-sm">
+		<div class="bg-white rounded-xl shadow-2xl p-6 w-full max-w-sm animate-popIn relative z-[10000]" onclick="event.stopPropagation()">
+			<h3 class="font-bold text-lg text-gray-800 mb-2">🔒 Xác thực Admin</h3>
+			<p class="text-sm text-gray-500 mb-4">Vui lòng nhập mật khẩu của nhân viên để tạo mã QR đăng nhập.</p>
+			
+			<!--<input type="password" id="qr-password-input" 
+				   class="w-full border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none mb-4 select-text text-gray-900 bg-white" 
+				   placeholder="Nhập mật khẩu..." autocomplete="off">-->
+			<input 
+				type="password" 
+				id="qr-password-input" 
+				class="w-full border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none mb-4 select-text text-gray-900 bg-white" 
+				placeholder="Nhập mật khẩu..." 
+				autocomplete="off"
+				enterkeyhint="go" 
+			>
+			<div class="flex gap-3 justify-end">
+				<button onclick="closePassModal()" class="px-4 py-2 bg-gray-100 text-gray-600 rounded-lg font-bold hover:bg-gray-200">Hủy</button>
+				<button onclick="submitQRPassword()" class="px-4 py-2 bg-blue-600 text-white rounded-lg font-bold shadow-md hover:bg-blue-700">Tạo Mã</button>
+			</div>
+		</div>
+	</div>
+
+	<div id="scan-settings-modal" class="hidden fixed inset-0 z-[80] bg-black bg-opacity-60 flex items-center justify-center p-4 backdrop-blur-sm">
+		<div class="bg-white rounded-2xl shadow-2xl p-5 w-full max-w-sm animate-popIn">
+			<div class="flex justify-between items-center mb-4 border-b pb-2">
+				<h3 class="font-bold text-lg text-gray-800">⚙️ Cài đặt Nút Quét</h3>
+				<button onclick="document.getElementById('scan-settings-modal').classList.add('hidden')" class="text-gray-400 text-xl">✕</button>
+			</div>
+
+			<div class="space-y-3">
+				
+				<label class="flex items-center justify-between p-3 border rounded-xl cursor-pointer hover:bg-gray-50 has-[:checked]:border-blue-500 has-[:checked]:bg-blue-50">
+					<div class="flex items-center gap-3">
+						<span class="text-xl">🔳</span>
+						<div>
+							<div class="font-bold text-gray-800 text-sm">Nút to giữa màn hình</div>
+							<div class="text-[10px] text-gray-500">Giao diện gốc (Không có nút nhỏ)</div>
+						</div>
+					</div>
+					<input type="radio" name="scan_mode" value="default" class="w-5 h-5 text-blue-600" onchange="saveScanMode('default')">
+				</label>
+
+				<label class="flex items-center justify-between p-3 border rounded-xl cursor-pointer hover:bg-gray-50 has-[:checked]:border-blue-500 has-[:checked]:bg-blue-50">
+					<div class="flex items-center gap-3">
+						<span class="text-blue-600">
+							<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6">
+							  <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 013.75 9.375v-4.5zM3.75 14.625c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5a1.125 1.125 0 01-1.125-1.125v-4.5zM13.5 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 0113.5 9.375v-4.5z" />
+							  <path stroke-linecap="round" stroke-linejoin="round" d="M6.75 6.75h.75v.75h-.75v-.75zM6.75 16.5h.75v.75h-.75v-.75zM16.5 6.75h.75v.75h-.75v-.75zM13.5 13.5h.75v.75h-.75v-.75zM13.5 19.5h.75v.75h-.75v-.75zM19.5 13.5h.75v.75h-.75v-.75zM16.5 16.5h.75v.75h-.75v-.75zM16.5 19.5h.75v.75h-.75v-.75z" />
+							</svg>
+						</span>
+						
+						<div>
+							<div class="font-bold text-gray-800 text-sm">Nút nhỏ: Tắt / Mở</div>
+							<div class="text-[10px] text-gray-500">Nút nhỏ cạnh ô nhập. Ẩn nút to.</div>
+						</div>
+					</div>
+					<input type="radio" name="scan_mode" value="toggle" class="w-5 h-5 text-blue-600" onchange="saveScanMode('toggle')">
+				</label>
+
+				<label class="flex items-center justify-between p-3 border rounded-xl cursor-pointer hover:bg-gray-50 has-[:checked]:border-blue-500 has-[:checked]:bg-blue-50">
+					<div class="flex items-center gap-3">
+						<span class="text-xl">👆</span>
+						<div>
+							<div class="font-bold text-gray-800 text-sm">Nút nhỏ: Giữ để quét</div>
+							<div class="text-[10px] text-gray-500">Giữ tay camera bật. Ẩn nút to.</div>
+						</div>
+					</div>
+					<input type="radio" name="scan_mode" value="hold" class="w-5 h-5 text-blue-600" onchange="saveScanMode('hold')">
+				</label>
+			</div>
+
+			<div class="mt-4 border-t pt-4 space-y-2">
+				<button onclick="enableLocalPasskey()" class="w-full bg-indigo-600 text-white py-3 rounded-xl font-bold shadow-lg active:scale-95 transition-transform">
+					🔐 Kích hoạt đăng nhập vân tay
+				</button>
+				<button onclick="disableLocalPasskey()" class="w-full bg-red-50 text-red-600 py-2.5 rounded-xl font-bold border border-red-100 active:scale-95 transition-transform">
+					🗑️ Xóa vân tay trên máy này
+				</button>
+				<p class="text-[10px] text-gray-400 text-center">Mỗi thiết bị cần kích hoạt riêng. Nếu xóa dữ liệu trình duyệt thì cần kích hoạt lại.</p>
+			</div>
+
+			<div class="mt-6">
+				<button onclick="document.getElementById('scan-settings-modal').classList.add('hidden')" class="w-full bg-gray-100 text-gray-600 py-3 rounded-xl font-bold">Đóng</button>
+			</div>
+		</div>
+	</div>
+
+	<div id="return-modal" class="hidden fixed inset-0 z-[80] bg-black bg-opacity-60 flex items-center justify-center p-4 backdrop-blur-sm">
+		<div class="bg-white rounded-xl shadow-2xl p-5 w-full max-w-xs animate-popIn">
+			<h3 class="font-bold text-lg text-red-600 mb-2">🔄 Trả Hàng & Hoàn Tiền</h3>
+			<p class="text-sm text-gray-500 mb-4" id="return-item-name">Tên sản phẩm...</p>
+			
+			<div class="mb-4">
+				<label class="text-xs font-bold text-gray-400 uppercase">Số lượng trả</label>
+				<div class="flex items-center gap-2 mt-1">
+					<button onclick="adjustReturnQty(-1)" class="w-10 h-10 bg-gray-100 rounded-lg font-bold text-xl text-gray-600">-</button>
+					<input type="number" id="return-qty-input" class="flex-1 bg-gray-50 border border-gray-200 h-10 rounded-lg text-center font-bold text-lg outline-none focus:border-red-500" value="1">
+					<button onclick="adjustReturnQty(1)" class="w-10 h-10 bg-gray-100 rounded-lg font-bold text-xl text-gray-600">+</button>
+				</div>
+				<p class="text-[10px] text-gray-400 mt-1 text-right">Đã mua: <span id="return-max-qty">0</span></p>
+			</div>
+
+			<div class="bg-orange-50 p-3 rounded-lg border border-orange-100 mb-4 text-center">
+				<span class="text-xs text-orange-600 font-bold block">Số tiền cần hoàn lại khách:</span>
+				<span id="return-refund-amt" class="text-xl font-bold text-orange-700">0đ</span>
+			</div>
+
+			<div class="grid grid-cols-2 gap-3">
+				<button onclick="closeReturnModal()" class="py-2 bg-gray-100 text-gray-600 rounded-lg font-bold">Hủy</button>
+				<button onclick="confirmReturn()" class="py-2 bg-red-600 text-white rounded-lg font-bold shadow-md hover:bg-red-700">Xác Nhận</button>
+			</div>
+		</div>
+	</div>
+	
+	<div id="receipt-print-area" class="hidden print:block bg-white text-black p-1 text-xs font-mono leading-tight">
+		<div class="text-center mb-2">
+			<h2 class="text-xl font-bold uppercase" id="rec-store-name">MINI POS</h2>
+			<p id="rec-address">123 Đường ABC, Quận XYZ</p>
+			<p id="rec-hotline">Hotline: 0909.123.456</p>
+			<p id="rec-is-copy" class="hidden font-bold text-[10px] mt-0.5">(BẢN SAO)</p>
+		</div>
+
+		<div class="border-b border-black border-dashed pb-1 mb-1">
+			<div class="flex justify-between"><span>Đơn:</span> <span id="rec-id" class="font-bold">#---</span></div>
+			<div class="flex justify-between"><span>Ngày:</span> <span id="rec-time">--/--/--</span></div>
+			<div class="flex justify-between"><span>NV:</span> <span id="rec-staff">---</span></div>
+		</div>
+
+		<div class="border-b border-black border-dashed pb-1 mb-1">
+			<table class="w-full text-left">
+				<thead>
+					<tr>
+						<th class="w-[45%]">Tên sản phẩm</th>
+						<th class="w-[15%] text-center">SL</th>
+						<th class="w-[20%] text-right">Giá</th>
+						<th class="w-[20%] text-right">Thành tiền</th>
+					</tr>
+				</thead>
+				<tbody id="rec-items-list">
+					</tbody>
+			</table>
+		</div>
+
+		<div class="flex justify-between font-bold text-sm mt-1">
+			<span>TỔNG CỘNG:</span>
+			<span id="rec-total">0đ</span>
+		</div>
+		
+		<div class="flex justify-between mt-1 text-[10px]">
+			<span>Khách đưa:</span>
+			<span id="rec-cash">0đ</span>
+		</div>
+		
+		<div class="flex justify-between mb-2 text-[10px]">
+			<span>Tiền thừa:</span>
+			<span id="rec-change">0đ</span>
+		</div>
+
+		<div class="text-center border-t border-black border-dashed pt-2">
+			<p class="italic" id="rec-footer-1">Cảm ơn & Hẹn gặp lại!</p>
+			
+			<p class="text-[10px] mt-1" id="rec-footer-2">Wifi: MiniPOS / Pass: 12345678</p>
+		</div>
+	</div>
+    <script>
+        const SUPABASE_URL = 'https://renqusdcczlhrglbclhe.supabase.co';
+        const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJlbnF1c2RjY3psaHJnbGJjbGhlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjUwMTIyMzUsImV4cCI6MjA4MDU4ODIzNX0.kF960FS-VvAM2rkNo9kVHfmGAkpwrmlZ5Vf9-QFiC2E';
+        
+        const client = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
+			auth: {
+				storage: sessionStorage,
+				autoRefreshToken: true,
+				persistSession: true,
+				detectSessionInUrl: true
+			}
+		});
+        const PLACEHOLDER_IMG = "data:image/svg+xml;charset=UTF-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2250%22%20height%3D%2250%22%20viewBox%3D%220%200%2050%2050%22%3E%3Crect%20width%3D%2250%22%20height%3D%2250%22%20fill%3D%22%23e5e7eb%22%2F%3E%3Ctext%20x%3D%2250%25%22%20y%3D%2250%25%22%20dominant-baseline%3D%22middle%22%20text-anchor%3D%22middle%22%20font-family%3D%22sans-serif%22%20font-size%3D%2212%22%20fill%3D%22%239ca3af%22%3EIMG%3C%2Ftext%3E%3C%2Fsvg%3E";
+
+        let productsDB = [];
+
+		let cart = JSON.parse(localStorage.getItem('pos_current_cart')) || []; 
+		let parkedOrders = JSON.parse(localStorage.getItem('pos_parked_orders')) || [];
+		
+        let html5QrcodeScanner = null, currentUserEmail = "", currentMultiplier = 1, currentUserRole = "staff";
+		
+		let lastScannedCode = null;
+		let lastScanTime = 0;
+		const SCAN_DELAY = 2000;
+		let globalSettings = { 
+			allow_print: true, 
+			enable_charts: true,
+			// Giá trị mặc định phòng khi chưa tải được
+			store_name: "CỬA HÀNG MINI POS",
+			store_address: "Hồ Chí Minh, Việt Nam",
+			receipt_footer: "Cảm ơn & Hẹn gặp lại!",
+			wifi_info: "Wifi: MiniPOS / Pass: 12345678",
+			store_hotline: "Hotline: 0909.123.456"
+		};
+		let myChart1 = null; 
+		let myChart2 = null;
+
+		// --- LOGIC KIỂM TRA GIÁ MỚI ---
+		let isCheckPriceMode = false;
+
+		function toggleCheckPriceMode() {
+			isCheckPriceMode = !isCheckPriceMode;
+			
+			const salesPanel = document.getElementById('sales-panel');
+			const checkPanel = document.getElementById('check-price-panel');
+			const scanFrame = document.querySelector('.border-green-400'); // Khung quét (nếu có)
+			
+			if (isCheckPriceMode) {
+				// Bật chế độ xem giá
+				salesPanel.classList.add('hidden');
+				checkPanel.classList.remove('hidden');
+				document.getElementById('check-price-input').focus();
+				
+				// Đổi màu khung quét sang màu Teal cho dễ nhận biết (nếu muốn)
+				showAlert("Đã bật chế độ xem giá", "Mọi mã quét lúc này sẽ chỉ hiện giá.", "info");
+			} else {
+				// Tắt chế độ, quay về bán hàng
+				salesPanel.classList.remove('hidden');
+				checkPanel.classList.add('hidden');
+				
+				// Reset kết quả
+				document.getElementById('check-result-container').innerHTML = `
+					<div class="opacity-50 grayscale">
+						<div class="text-5xl mb-2">🏷️</div>
+						<p class="text-gray-400 text-sm">Mời quét sản phẩm...</p>
+					</div>`;
+			}
+		}
+
+		// Hàm xử lý nhập tay ở chế độ xem giá
+		function handleCheckPriceManual(e) {
+			if (e.key === 'Enter') {
+				const val = e.target.value.trim();
+				if (val) processCheckPrice(val);
+				e.target.value = '';
+				e.target.blur();
+			}
+		}
+
+		// Hàm hiển thị kết quả (Render vào khung bên dưới)
+		function processCheckPrice(key) {
+			const k = key.trim().toLowerCase();
+			const p = productsDB.find(x => (x.barcode == k || (x.item_code && x.item_code.toLowerCase() == k))) || productsDB.find(x => x.name.toLowerCase().includes(k));
+			
+			const el = document.getElementById('check-result-container');
+			
+			if (!p) {
+				el.innerHTML = `<div class="text-5xl mb-2">🤷‍♂️</div><h3 class="text-red-500 font-bold text-xl">Không tìm thấy!</h3><p class="text-xs text-gray-400">Mã: ${key}</p>`;
+				// Phát âm thanh lỗi nếu cần
+				if(navigator.vibrate) navigator.vibrate([50, 50, 50]);
+				return;
+			}
+
+			// Nếu tìm thấy -> Hiển thị đẹp
+			let priceHtml = '';
+			if (p.sale_price && p.sale_price < p.price) {
+				priceHtml = `
+					<div class="flex items-end gap-2 justify-center mt-1">
+						<span class="text-gray-400 line-through text-lg font-medium">${formatMoney(p.price)}</span>
+						<span class="text-red-600 font-bold text-4xl font-display">${formatMoney(p.sale_price)}</span>
+					</div>
+					<span class="bg-red-100 text-red-600 px-3 py-1 rounded-full text-xs font-bold mt-2 inline-block animate-pulse">🔥 Đang giảm giá</span>`;
+			} else {
+				priceHtml = `<div class="text-teal-600 font-bold text-4xl mt-2 font-display">${formatMoney(p.price)}</div>`;
+			}
+
+			el.innerHTML = `
+				<div class="flex gap-4 items-center w-full text-left">
+					<img src="${p.image || PLACEHOLDER_IMG}" class="w-24 h-24 object-cover rounded-xl shadow-sm border border-gray-100 bg-white">
+					<div class="flex-1">
+						<h3 class="font-bold text-gray-800 text-lg leading-tight line-clamp-2">${p.name}</h3>
+						<div class="flex gap-2 mt-1">
+							<span class="text-[10px] bg-gray-100 px-2 py-1 rounded text-gray-500 font-bold border">Mã: ${p.barcode || '---'}</span>
+							<span class="text-[10px] bg-gray-100 px-2 py-1 rounded text-gray-500 font-bold border">ĐVT: ${p.unit || 'Cái'}</span>
+						</div>
+					</div>
+				</div>
+				<div class="mt-2 w-full border-t border-dashed border-teal-100 pt-2 text-center">
+					${priceHtml}
+					${p.is_locked ? '<div class="mt-2 text-red-500 font-bold text-xs bg-red-50 p-2 rounded border border-red-100">🔒 SẢN PHẨM ĐANG KHÓA</div>' : ''}
+				</div>
+			`;
+			
+			if(navigator.vibrate) navigator.vibrate(50);
+		}
+
+		// --- HÀM LẮNG NGHE REALTIME (Tự động cập nhật dữ liệu) ---
+		let realtimeChannel = null;
+
+		function setupRealtimeListeners() {
+			// Nếu đã có kết nối cũ thì hủy trước để tránh trùng lặp
+			if (realtimeChannel) client.removeChannel(realtimeChannel);
+
+			console.log("📡 Đang kết nối Realtime...");
+
+			realtimeChannel = client
+				.channel('public-db-changes') // Tên kênh bất kỳ
+				
+				// 1. Lắng nghe thay đổi bảng SẢN PHẨM (products)
+				// (Khi bán hàng hoặc trả hàng -> Tự cập nhật kho và danh sách)
+				.on(
+					'postgres_changes', 
+					{ event: '*', schema: 'public', table: 'products' }, 
+					(payload) => {
+						console.log('♻️ Kho hàng thay đổi:', payload);
+						fetchProducts(); // Tải lại danh sách sản phẩm
+					}
+				)
+
+				// 2. Lắng nghe thay đổi bảng ĐƠN HÀNG (orders)
+				// (Khi có đơn mới hoặc trả hàng -> Tự cập nhật doanh thu & lịch sử)
+				.on(
+					'postgres_changes', 
+					{ event: '*', schema: 'public', table: 'orders' }, 
+					(payload) => {
+						console.log('💰 Đơn hàng thay đổi:', payload);
+						
+						// Nếu đang mở Admin Doanh thu -> Tải lại số liệu
+						if (!document.getElementById('admin-revenue').classList.contains('hidden')) {
+							loadRevenue(); 
+							viewRevenueDetail();
+						}
+
+						// Nếu đang mở Lịch sử đơn hàng -> Tải lại danh sách
+						if (!document.getElementById('history-modal').classList.contains('hidden')) {
+							openHistory();
+						}
+					}
+				)
+				
+				// 3. Lắng nghe thay đổi bảng CÀI ĐẶT (app_settings)
+				// (Admin đổi cấu hình -> Nhân viên tự cập nhật ngay)
+				.on(
+					 'postgres_changes',
+					 { event: 'UPDATE', schema: 'public', table: 'app_settings' },
+					 () => {
+						 console.log('⚙️ Cài đặt thay đổi');
+						 fetchSystemSettings();
+						 // Kiểm tra lại bảo trì
+						 checkSession(); 
+					 }
+				)
+
+				.subscribe((status) => {
+					if (status === 'SUBSCRIBED') {
+						console.log('✅ Đã kết nối Realtime thành công!');
+					}
+				});
+		}
+
+        // === SYSTEM FUNCTIONS ===
+        async function checkSession() {
+			try {
+				const { data: { session }, error } = await client.auth.getSession();
+				if (error) throw error;
+				
+				if (session) {
+					currentUserEmail = session.user.email;
+					
+					// 1. Lấy Role trước
+					await fetchUserRole(currentUserEmail); 
+
+					// 2. --- KIỂM TRA BẢO TRÌ NGAY SAU KHI CÓ ROLE ---
+					const { data: settings } = await client.from('app_settings').select('*').eq('id', 1).single();
+					
+					if (settings && settings.maintenance_mode && currentUserRole !== 'admin') {
+						showAlert("BẢO TRÌ", settings.maintenance_message || "Hệ thống đang bảo trì.", 'error', () => {
+							forceLogout();
+						});
+						return; // Dừng lại, không cho vào App
+					}
+					// ------------------------------------------------
+
+					// Nếu qua được cửa ải trên thì mới vào App
+					document.getElementById('user-email').innerText = currentUserEmail.split('@')[0];
+					document.getElementById('login-screen').classList.add('hidden'); 
+					document.getElementById('scan-screen').classList.remove('hidden');
+					
+					fetchProducts();
+					fetchSystemSettings();
+					updateParkedBadge();
+					updateCartUI();
+					startHeartbeat();
+					setupRealtimeListeners();
+				}
+			} catch (err) { console.log(err); forceLogout(); }
+		}
+        async function handleLogin() {
+			// 1. Lấy giá trị và TRIM (xóa khoảng trắng thừa đầu đuôi)
+			const email = document.getElementById('email').value.trim();
+			const password = document.getElementById('password').value.trim();
+
+			// 2. Kiểm tra nếu để trống thì báo lỗi ngay, không gửi lên server
+			if (!email || !password) {
+				document.getElementById('login-msg').innerText = "⚠️ Vui lòng nhập đủ Email và Mật khẩu!";
+				return;
+			}
+
+			// 3. Gửi yêu cầu đăng nhập
+			const { error } = await client.auth.signInWithPassword({ email, password });
+
+			if (error) {
+				console.error("Lỗi đăng nhập:", error); // Xem lỗi chi tiết trong Console (F12)
+				
+				// Dịch một số lỗi phổ biến sang tiếng Việt
+				if (error.message.includes("Invalid login credentials")) {
+					document.getElementById('login-msg').innerText = "❌ Sai Email hoặc Mật khẩu!";
+				} else if (error.message.includes("Email not confirmed")) {
+					document.getElementById('login-msg').innerText = "📧 Email chưa được xác thực (Vui lòng tắt Confirm Email trong Supabase)";
+				} else {
+					document.getElementById('login-msg').innerText = "❌ Lỗi: " + error.message;
+				}
+			} else {
+				checkSession();
+			}
+		}
+        async function forceLogout() {
+			await client.auth.signOut();
+			sessionStorage.clear();
+			// Không xóa MINI_POS_LOCAL_PASSKEY để lần sau vẫn có thể mở bằng vân tay nếu token còn hiệu lực.
+			// Muốn xóa hoàn toàn thì dùng nút "Xóa vân tay trên máy này".
+			window.location.reload();
+		}
+
+		// ======================= LOCAL PASSKEY UNLOCK (WebAuthn + Supabase session) =======================
+		// Cách này KHÔNG dùng Supabase Passkey beta.
+		// Nó dùng vân tay/Face ID/PIN của thiết bị để mở lại session Supabase đã lưu trên máy này.
+		const MINI_POS_PASSKEY_KEY = 'MINI_POS_LOCAL_PASSKEY_V1';
+
+		function mpBufferToBase64url(buffer) {
+			const bytes = new Uint8Array(buffer);
+			let str = '';
+			for (const b of bytes) str += String.fromCharCode(b);
+			return btoa(str).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+		}
+
+		function mpBase64urlToBuffer(base64url) {
+			const base64 = base64url.replace(/-/g, '+').replace(/_/g, '/');
+			const pad = '='.repeat((4 - base64.length % 4) % 4);
+			const str = atob(base64 + pad);
+			const bytes = new Uint8Array(str.length);
+			for (let i = 0; i < str.length; i++) bytes[i] = str.charCodeAt(i);
+			return bytes.buffer;
+		}
+
+		function mpRandomBuffer(length = 32) {
+			const buffer = new Uint8Array(length);
+			crypto.getRandomValues(buffer);
+			return buffer;
+		}
+
+		async function mpCheckWebAuthnSupport() {
+			if (!window.PublicKeyCredential || !navigator.credentials) {
+				showAlert("Không hỗ trợ", "Trình duyệt này chưa hỗ trợ vân tay/Passkey WebAuthn.", "error");
+				return false;
+			}
+
+			const available = await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
+			if (!available) {
+				showAlert("Không hỗ trợ", "Thiết bị chưa bật vân tay/Face ID/Windows Hello hoặc khóa màn hình.", "error");
+				return false;
+			}
+
+			if (!(location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
+				showAlert("Cần HTTPS", "Đăng nhập vân tay chỉ chạy trên HTTPS hoặc localhost.", "warning");
+				return false;
+			}
+
+			return true;
+		}
+
+		async function enableLocalPasskey() {
+			try {
+				if (!await mpCheckWebAuthnSupport()) return;
+
+				const { data: { session }, error } = await client.auth.getSession();
+				if (error) throw error;
+
+				if (!session || !session.user) {
+					showAlert("Chưa đăng nhập", "Bạn cần đăng nhập bằng email/mật khẩu trước, rồi mới kích hoạt vân tay.", "warning");
+					return;
+				}
+
+				const userEmail = session.user.email || 'mini-pos-user';
+				const userId = new TextEncoder().encode(session.user.id || userEmail);
+
+				const credential = await navigator.credentials.create({
+					publicKey: {
+						challenge: mpRandomBuffer(32),
+						rp: {
+							name: "Mini POS"
+						},
+						user: {
+							id: userId,
+							name: userEmail,
+							displayName: userEmail
+						},
+						pubKeyCredParams: [
+							{ type: "public-key", alg: -7 },
+							{ type: "public-key", alg: -257 }
+						],
+						authenticatorSelection: {
+							authenticatorAttachment: "platform",
+							userVerification: "required",
+							residentKey: "preferred"
+						},
+						timeout: 60000,
+						attestation: "none"
+					}
+				});
+
+				if (!credential) {
+					showAlert("Thông báo", "Bạn đã hủy đăng ký vân tay.", "warning");
+					return;
+				}
+
+				const saved = {
+					email: userEmail,
+					userId: session.user.id,
+					credentialId: mpBufferToBase64url(credential.rawId),
+					access_token: session.access_token,
+					refresh_token: session.refresh_token,
+					createdAt: new Date().toISOString()
+				};
+
+				localStorage.setItem(MINI_POS_PASSKEY_KEY, JSON.stringify(saved));
+				showAlert("Thành công", "Đã kích hoạt đăng nhập bằng vân tay trên thiết bị này.", "success");
+			} catch (err) {
+				console.error("enableLocalPasskey error:", err);
+				showAlert("Lỗi kích hoạt vân tay", err.message || String(err), "error");
+			}
+		}
+
+		async function loginWithLocalPasskey() {
+			try {
+				if (!await mpCheckWebAuthnSupport()) return;
+
+				const savedText = localStorage.getItem(MINI_POS_PASSKEY_KEY);
+				if (!savedText) {
+					showAlert("Chưa kích hoạt", "Bạn cần đăng nhập bằng email/mật khẩu trước, rồi vào ⚙️ Cài đặt để kích hoạt vân tay.", "warning");
+					return;
+				}
+
+				const saved = JSON.parse(savedText);
+				if (!saved.credentialId || !saved.refresh_token || !saved.access_token) {
+					showAlert("Dữ liệu lỗi", "Dữ liệu vân tay trên máy này không hợp lệ. Vui lòng xóa và kích hoạt lại.", "error");
+					return;
+				}
+
+				await navigator.credentials.get({
+					publicKey: {
+						challenge: mpRandomBuffer(32),
+						allowCredentials: [{
+							type: "public-key",
+							id: mpBase64urlToBuffer(saved.credentialId)
+						}],
+						userVerification: "required",
+						timeout: 60000
+					}
+				});
+
+				const { data, error } = await client.auth.setSession({
+					access_token: saved.access_token,
+					refresh_token: saved.refresh_token
+				});
+
+				if (error) throw error;
+
+				// Cập nhật token mới nếu Supabase refresh session
+				if (data && data.session) {
+					saved.access_token = data.session.access_token;
+					saved.refresh_token = data.session.refresh_token;
+					saved.updatedAt = new Date().toISOString();
+					localStorage.setItem(MINI_POS_PASSKEY_KEY, JSON.stringify(saved));
+				}
+
+				showAlert("Thành công", "Đăng nhập bằng vân tay thành công.", "success", () => {
+					checkSession();
+				});
+			} catch (err) {
+				console.error("loginWithLocalPasskey error:", err);
+				let msg = err.message || String(err);
+				if (err.name === "NotAllowedError") msg = "Bạn đã hủy xác thực hoặc xác thực không thành công.";
+				showAlert("Lỗi đăng nhập vân tay", msg, "error");
+			}
+		}
+
+		function disableLocalPasskey() {
+			localStorage.removeItem(MINI_POS_PASSKEY_KEY);
+			showAlert("Đã xóa", "Đã xóa đăng nhập vân tay trên thiết bị này.", "success");
+		}
+
+        
+        async function fetchUserRole(email) {
+			try {
+				const { data } = await client
+					.from('app_users') 
+					.select('role')
+					.eq('email', email)
+					.maybeSingle(); // Dùng maybeSingle cho an toàn
+
+				currentUserRole = data ? data.role : 'staff';
+				
+				// Cập nhật giao diện ngay lập tức
+				if(currentUserRole === 'admin') {
+					document.getElementById('btn-open-admin').classList.remove('hidden');
+				} else {
+					document.getElementById('btn-open-admin').classList.add('hidden');
+				}
+			} catch (e) { console.log(e); }
+		}
+
+        // ======================= CUSTOM MODAL LOGIC (TRÁI TIM UI MỚI) =======================
+        let modalCallback = null;
+		let modalCancelCallback = null;
+
+		function showAlert(title, msg, type = 'info', callback = null, cancelCallback = null) {
+			const modal = document.getElementById('custom-alert');
+			const iconEl = document.getElementById('alert-icon');
+			const actionsEl = document.getElementById('alert-actions');
+			
+			document.getElementById('alert-title').innerText = title;
+			document.getElementById('alert-msg').innerHTML = msg;
+			
+			modalCallback = callback;
+			modalCancelCallback = cancelCallback; // Lưu callback hủy
+
+			let iconHtml = 'ℹ️', colorClass = 'bg-blue-50 text-blue-600', btnsHtml = '';
+
+			if (type === 'success') {
+				iconHtml = '✅'; colorClass = 'bg-green-50 text-green-600';
+				btnsHtml = `<button onclick="closeAlert()" class="col-span-2 py-4 text-green-600 font-bold hover:bg-green-50">Đóng</button>`;
+			} else if (type === 'error') {
+				iconHtml = '⚠️'; colorClass = 'bg-red-50 text-red-600';
+				btnsHtml = `<button onclick="closeAlert()" class="col-span-2 py-4 text-red-600 font-bold hover:bg-red-50">Đóng</button>`;
+			} else if (type === 'confirm') {
+				iconHtml = '❓'; colorClass = 'bg-orange-50 text-orange-600';
+				// 3. Sửa nút Hủy: Gọi cancelAction() thay vì closeAlert()
+				btnsHtml = `
+					<button onclick="cancelAction()" class="py-4 text-gray-500 font-semibold hover:bg-gray-100 border-r">Hủy</button>
+					<button onclick="confirmAction()" class="py-4 text-blue-600 font-bold hover:bg-blue-50">Đồng ý</button>`;
+			} else {
+				btnsHtml = `<button onclick="closeAlert()" class="col-span-2 py-4 text-blue-600 font-bold hover:bg-blue-50">OK</button>`;
+			}
+
+			iconEl.className = `w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 text-3xl ${colorClass}`;
+			iconEl.innerHTML = iconHtml;
+			actionsEl.innerHTML = btnsHtml;
+			modal.classList.remove('hidden');
+		}
+
+        function closeAlert() {
+			document.getElementById('custom-alert').classList.add('hidden');
+			modalCallback = null;
+			modalCancelCallback = null; // Reset biến hủy
+		}
+
+        function confirmAction() {
+            if (modalCallback) modalCallback();
+            closeAlert();
+        }
+
+		function cancelAction() {
+			const cancelCb = modalCancelCallback; // Lưu lại biến tạm
+			closeAlert(); // Đóng bảng hiện tại trước
+			
+			// Nếu có hành động hủy, chạy nó sau 100ms (để bảng cũ kịp đóng)
+			if (cancelCb) {
+				setTimeout(() => {
+					cancelCb();
+				}, 100);
+			}
+		}
+
+        // ======================= APP LOGIC =======================
+
+        async function fetchProducts() {
+            let { data, error } = await client.from('products').select('*').order('created_at', { ascending: false });
+            if (error) { const res = await client.from('products').select('*'); data = res.data; }
+            if (data) { productsDB = data; renderProductList(); }
+        }
+
+        // --- SCANNER MỚI (NATIVE + WASM) ---
+        let isScanning = false;
+        let barcodeDetector = null;
+        let scanStream = null;
+
+        // Hàm khởi tạo bộ giải mã (Chạy 1 lần duy nhất)
+        async function initBarcodeDetector() {
+            if (barcodeDetector) return barcodeDetector;
+
+            const formats = ['qr_code', 'ean_13', 'code_128', 'code_39', 'upc_a', 'upc_e'];
+            
+            // Ưu tiên dùng Native (Chrome Android/macOS)
+            if ('BarcodeDetector' in window) {
+                try {
+                    const nativeDetector = new window.BarcodeDetector({ formats });
+                    // Kiểm tra xem native có hỗ trợ định dạng cơ bản không
+                    const supported = await window.BarcodeDetector.getSupportedFormats();
+                    if (supported.includes('qr_code')) {
+                        console.log('Using Native Barcode Detector ⚡');
+                        barcodeDetector = nativeDetector;
+                        return barcodeDetector;
+                    }
+                } catch (e) { console.log('Native detector failed, switching to polyfill...'); }
+            }
+
+            // Fallback sang Polyfill (Wasm) nếu Native không có
+            if (window.BarcodeDetectorPolyfill) {
+                console.log('Using Wasm Barcode Detector 📦');
+                barcodeDetector = new window.BarcodeDetectorPolyfill({ formats });
+            }
+            return barcodeDetector;
+        }
+
+        async function startScanner() {
+            // 1. Chặn nếu đang quét
+            if (isScanning) return;
+            
+            // 2. Ẩn giao diện chờ
+            document.getElementById('camera-placeholder').classList.add('hidden');
+            
+            if (currentScanMode === 'default') {
+				const btnStop = document.getElementById('btn-stop-cam');
+				if(btnStop) btnStop.classList.remove('hidden');
+			}
+
+            const videoEl = document.getElementById('scan-video');
+            const canvasEl = document.getElementById('scan-canvas');
+            const ctx = canvasEl.getContext('2d', { willReadFrequently: true });
+
+            try {
+                // 3. Khởi tạo Detector
+                const detector = await initBarcodeDetector();
+                if (!detector) throw new Error("Không thể khởi tạo bộ quét mã.");
+
+                // 4. Mở Camera (Full HD để bắt mã vạch tốt hơn)
+                const stream = await navigator.mediaDevices.getUserMedia({
+					video: { 
+						facingMode: "environment",
+						width: { ideal: 1920 }, 
+						height: { ideal: 1080 },
+						focusMode: "continuous"
+					}
+				});
+				
+				scanStream = stream;
+				videoEl.srcObject = stream;
+				await videoEl.play();
+				isScanning = true;
+
+				// Kiểm tra kỹ trước khi gọi để tránh lỗi null
+				const focusBoxEl = document.getElementById('scan-focus-box');
+				const guideTextEl = document.getElementById('scan-guide-text');
+
+				if (focusBoxEl) focusBoxEl.classList.remove('hidden');
+				if (guideTextEl) guideTextEl.classList.remove('hidden');
+
+                // 5. Vòng lặp quét (Loop)
+                // Biến timer để reset về giữa khi mất dấu mã
+                let resetTimer = null;
+
+                // --- VÒNG LẶP QUÉT ---
+                const renderLoop = async () => {
+					if (!isScanning || videoEl.paused || videoEl.ended) return;
+
+					try {
+						const codes = await detector.detect(videoEl);
+						const focusBox = document.getElementById('scan-focus-box');
+						
+						if (codes.length > 0) {
+							const code = codes[0]; 
+
+							// 1. Chỉ đổi màu (Thêm class active-capture)
+							if (focusBox) {
+								focusBox.classList.remove('idle-state');
+								focusBox.classList.add('active-capture');
+							}
+
+							// 2. Xử lý nghiệp vụ (Thêm giỏ hàng / Check giá)
+							const currentTime = Date.now();
+							if (code.rawValue !== lastScannedCode || (currentTime - lastScanTime > 1000)) {
+								lastScannedCode = code.rawValue;
+								lastScanTime = currentTime;
+								
+								if (typeof playBeepSound === "function") playBeepSound();
+								
+								// Logic xử lý mã
+								if (typeof isCheckPriceMode !== 'undefined' && isCheckPriceMode) {
+									processCheckPrice(code.rawValue);
+								} else {
+									try { addToCart(code.rawValue); } catch (e) {}
+								}
+
+								// Nếu dùng nút Toggle thì tự tắt cam
+								if (typeof currentScanMode !== 'undefined' && currentScanMode === 'toggle') {
+									stopScanner();
+									return;
+								}
+							}
+						} 
+						else {
+							// Không thấy mã -> Trả về màu trắng
+							if (focusBox) {
+								focusBox.classList.add('idle-state');
+								focusBox.classList.remove('active-capture');
+							}
+						}
+
+					} catch (err) {
+						// Bỏ qua lỗi
+					}
+
+					requestAnimationFrame(renderLoop);
+				};
+
+                renderLoop();
+
+            } catch (err) {
+                console.error("Lỗi Camera:", err);
+                showAlert("Lỗi Camera", "Không thể truy cập camera. Vui lòng cấp quyền hoặc thử lại.", 'error');
+                stopScanner();
+            }
+        }
+
+		function playBeepSound() {
+            // Tạo âm thanh bíp ngắn bằng AudioContext (Không cần file mp3)
+            const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            const oscillator = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+
+            oscillator.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+
+            oscillator.type = "sine"; // Âm thanh dạng sóng sin (bíp nhẹ)
+            oscillator.frequency.setValueAtTime(1000, audioCtx.currentTime); // Tần số 1000Hz
+            gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime); // Âm lượng nhỏ
+
+            oscillator.start();
+            oscillator.stop(audioCtx.currentTime + 0.1); // Kêu trong 0.1 giây
+        }
+
+        async function stopScanner() {
+            isScanning = false;
+            
+            // Dừng camera
+            if (scanStream) {
+                scanStream.getTracks().forEach(track => track.stop());
+                scanStream = null;
+            }
+
+			const focusBox = document.getElementById('scan-focus-box');
+            const guideText = document.getElementById('scan-guide-text');
+
+			// --- THÊM ĐOẠN NÀY VÀO CUỐI HÀM stopScanner ---
+			const toggleBtn = document.getElementById('toggle-scan-btn');
+			if (toggleBtn) {
+				toggleBtn.classList.remove('bg-red-600', 'animate-pulse');
+				toggleBtn.classList.add('bg-blue-600');
+			}
+
+            if(focusBox) {
+                focusBox.classList.add('hidden'); // <--- Quan trọng
+                focusBox.classList.add('idle-state');
+                focusBox.classList.remove('active-capture');
+                focusBox.style = "";
+            }
+            if(guideText) guideText.classList.add('hidden');
+
+            const videoEl = document.getElementById('scan-video');
+            if (videoEl) videoEl.srcObject = null;
+
+            // Xóa khung vẽ
+            const canvasEl = document.getElementById('scan-canvas');
+            if (canvasEl) {
+                const ctx = canvasEl.getContext('2d');
+                ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
+            }
+
+            // Cập nhật UI
+            if (currentScanMode === 'default') {
+                document.getElementById('camera-placeholder').classList.remove('hidden'); 
+            }
+            document.getElementById('btn-stop-cam').classList.add('hidden');
+        }
+
+        // --- CART ---
+        function addToCart(key) {
+			// 1. Chế độ xem giá
+			if (isCheckPriceMode) {
+				processCheckPrice(key);
+				return; 
+			}
+
+			const k = key.trim().toLowerCase(); if(!k) return;
+			
+			// 2. Tìm sản phẩm
+			const p = productsDB.find(x => (x.barcode==k || (x.item_code && x.item_code.toLowerCase()==k))) || productsDB.find(x => x.name.toLowerCase().includes(k));
+			
+			if(!p) return showAlert("Không tìm thấy", `Không có sản phẩm nào khớp với mã "${key}"`, 'error');
+			
+			// 3. Kiểm tra khóa sản phẩm
+			if(p.is_locked) return showAlert("Sản phẩm khóa", "Sản phẩm này đang tạm ngưng kinh doanh.", 'error');
+
+			// 4. KIỂM TRA TỒN KHO
+			if ((p.quantity || 0) <= 0) {
+				return showAlert("Hết hàng", `Sản phẩm "${p.name}" đã hết hàng trong kho!`, 'error');
+			}
+			
+			// Tìm xem món này đã có trong giỏ chưa
+			// (Lần khai báo đầu tiên - Giữ nguyên)
+			const exist = cart.find(x => x.id === p.id);
+			
+			// Logic kiểm tra số lượng tồn kho so với giỏ hàng
+			const currentQtyInCart = exist ? exist.quantity : 0;
+			if (currentQtyInCart + currentMultiplier > p.quantity) {
+					return showAlert("Không đủ hàng", `Trong kho chỉ còn ${p.quantity}, bạn đang mua quá số lượng!`, 'error');
+			}
+			
+			// 5. Thêm vào giỏ
+			const qty = currentMultiplier;
+			const price = (p.sale_price && p.sale_price < p.price) ? p.sale_price : p.price;
+			
+			if(exist) {
+				// --- ĐÃ SỬA: Ở đây không dùng 'const exist =' nữa mà dùng trực tiếp biến exist đã tìm thấy ở trên ---
+				exist.quantity += qty; 
+			} else {
+				cart.push({...p, quantity: qty, finalPrice: price});
+			}
+			
+			// 6. Cập nhật giao diện & Hiệu ứng
+			updateCartUI();
+			
+			document.getElementById('last-item-name').innerText = p.name;
+			document.getElementById('last-item-info').innerText = `Mã: ${p.barcode || '---'} | ĐVT: ${p.unit || '---'}`;
+			const priceEl = document.getElementById('last-item-price-container');
+			if(p.sale_price && p.sale_price < p.price) { 
+				priceEl.innerHTML = `<span class="line-through text-gray-400 text-xs mr-2">${formatMoney(p.price)}</span><span class="text-red-600 font-bold text-sm">${formatMoney(p.sale_price)}</span>`; 
+			} else { 
+				priceEl.innerHTML = `<span class="font-bold text-blue-600 text-sm">${formatMoney(p.price)}</span>`; 
+			}
+			document.getElementById('last-item-qty').innerText = "+" + qty;
+			
+			document.getElementById('last-scanned-card').classList.remove('hidden', 'scan-success'); 
+			void document.getElementById('last-scanned-card').offsetWidth; 
+			document.getElementById('last-scanned-card').classList.add('scan-success');
+			
+			if(currentMultiplier > 1) { currentMultiplier = 1; document.getElementById('multiplier-badge').classList.add('hidden'); }
+			if(navigator.vibrate) navigator.vibrate(100);
+		}
+
+        function updateCartUI() {
+			// 1. Tính toán
+			const totalQty = cart.reduce((s, i) => s + i.quantity, 0);
+			const totalMoney = cart.reduce((s, i) => s + (i.quantity * i.finalPrice), 0);
+
+			// 2. Lấy các phần tử
+			const btn = document.getElementById('btn-cart-payment');
+			const badge = document.getElementById('quick-count');
+			const totalText = document.getElementById('quick-total');
+
+			// 3. Cập nhật Text
+			// Logic nảy số: Xóa class cũ -> Đợi xíu -> Thêm lại class để nó chạy lại animation
+			badge.classList.remove('badge-pop');
+			void badge.offsetWidth; // Hack: Ép trình duyệt render lại để reset animation
+			badge.classList.add('badge-pop');
+			
+			badge.innerText = totalQty;
+			totalText.innerText = formatMoney(totalMoney) + " ➜";
+			
+			localStorage.setItem('pos_current_cart', JSON.stringify(cart));
+
+			// 4. --- LOGIC GIAO DIỆN CAO CẤP ---
+			if (btn && badge) {
+				if (totalQty > 0) {
+					// === CÓ HÀNG: MÀU GRADIENT & PHÁT SÁNG ===
+					
+					// Xóa style xám
+					btn.classList.remove('bg-gray-200', 'text-gray-400', 'shadow-none', 'pointer-events-none');
+					
+					// Thêm Gradient + Bóng + Hiệu ứng nhịp đập (pulse)
+					// bg-gradient-to-r from-blue-600 to-blue-500: Tạo màu chuyển sắc
+					btn.classList.add(
+						'bg-gradient-to-r', 'from-blue-600', 'to-indigo-600', // Màu chuyển sắc
+						'text-white', 
+						'shadow-lg', 'shadow-blue-500/50', // Bóng đổ màu xanh mờ
+						'cursor-pointer',
+						'cart-active-pulse' // Class tự tạo ở Bước 1
+					);
+					
+					// Badge màu trắng mờ sang trọng
+					badge.className = "bg-white/20 px-3 py-1 rounded-lg text-sm font-bold backdrop-blur-md border border-white/20 badge-pop";
+
+				} else {
+					// === GIỎ TRỐNG: XÁM CHÌM ===
+					
+					// Reset toàn bộ class xịn
+					btn.className = "w-full bg-gray-100 text-gray-400 p-4 rounded-2xl font-bold text-xl shadow-inner flex justify-between items-center transition-all duration-300 pointer-events-none border border-gray-200";
+					
+					// Badge màu tối
+					badge.className = "bg-gray-200 px-3 py-1 rounded-lg text-sm text-gray-400";
+				}
+			}
+		}
+
+        // --- PAYMENT ---
+        function goToPayment() {
+            if(cart.length==0) return showAlert("Giỏ hàng trống", "Vui lòng quét thêm sản phẩm trước khi thanh toán.", 'info');
+			
+			history.pushState({view: 'payment'}, "Thanh toán", "#payment");
+			
+            if(html5QrcodeScanner) html5QrcodeScanner.pause();
+            document.getElementById('scan-screen').classList.add('hidden'); document.getElementById('payment-screen').classList.remove('hidden');
+            renderPaymentList();
+        }
+        function backToScan() {
+            document.getElementById('payment-screen').classList.add('hidden'); document.getElementById('scan-screen').classList.remove('hidden');
+            if(html5QrcodeScanner) html5QrcodeScanner.resume();
+			
+			history.back();
+        }
+        function renderPaymentList() {
+            document.getElementById('cart-list').innerHTML = cart.map((i, idx) => `
+                <div class="bg-white p-3 rounded-xl border flex justify-between items-center shadow-sm">
+                    <div class="flex-1">
+                        <div class="font-bold text-gray-800">${i.name}</div>
+                        <div class="text-[11px] text-gray-500 font-semibold mb-1">Mã: ${i.barcode || '---'} | ĐVT: ${i.unit || '---'}</div>
+                        <div class="text-sm text-blue-600 font-bold">${formatMoney(i.finalPrice)} x ${i.quantity} = ${formatMoney(i.finalPrice * i.quantity)}</div>
+                    </div>
+                    <div class="flex items-center gap-3 ml-2">
+                        <button onclick="changeQty(${idx}, -1)" class="w-9 h-9 bg-gray-100 rounded-lg font-bold text-gray-600 active:bg-gray-200">-</button>
+                        <span class="font-bold w-6 text-center text-lg">${i.quantity}</span>
+                        <button onclick="changeQty(${idx}, 1)" class="w-9 h-9 bg-blue-100 text-blue-600 rounded-lg font-bold active:bg-blue-200">+</button>
+                    </div>
+                </div>`).join('');
+            const total = cart.reduce((s,i) => s + (i.quantity * i.finalPrice), 0);
+            document.getElementById('final-total').innerText = formatMoney(total);
+            calculateChange();
+        }
+        
+        function changeQty(idx, d) { 
+            const newQty = cart[idx].quantity + d;
+            if (newQty <= 0) {
+                showAlert("Xóa sản phẩm", `Bạn muốn xóa "${cart[idx].name}" khỏi giỏ?`, 'confirm', () => {
+                    cart.splice(idx, 1);
+                    finalizeChangeQty();
+                });
+            } else {
+                cart[idx].quantity = newQty;
+                finalizeChangeQty();
+            }
+        }
+        function finalizeChangeQty() {
+            updateCartUI();
+            if (cart.length === 0) backToScan(); else renderPaymentList();
+            const feedbackCard = document.getElementById('last-scanned-card');
+            if(feedbackCard) feedbackCard.classList.add('hidden');
+        }
+
+		// --- HÀM XÓA TẤT CẢ SẢN PHẨM ---
+		async function deleteAllProducts() {
+			showAlert(
+				"CẢNH BÁO", 
+				"Bạn có chắc chắn muốn XÓA SẠCH toàn bộ danh sách hàng hóa? Hành động này không thể khôi phục!", 
+				'confirm', 
+				async () => {
+					// Xóa tất cả dòng có ID khác 0 (nghĩa là xóa hết)
+					const { error } = await client.from('products').delete().neq('id', 0);
+					
+					if (error) {
+						showAlert("Lỗi", "Không thể xóa: " + error.message, 'error');
+					} else {
+						showAlert("Đã xóa", "Dữ liệu hàng hóa đã được dọn sạch.", 'success');
+						fetchProducts(); // Tải lại danh sách trống
+					}
+				}
+			);
+		}
+
+        function calculateChange() {
+			// 1. Tính toán
+			const total = cart.reduce((s, i) => s + (i.quantity * i.finalPrice), 0);
+			const inputVal = document.getElementById('money-received').value;
+			const received = parseInt(inputVal) || 0;
+			const change = received - total;
+
+			// --- LOGIC MỚI: ẨN/HIỆN NÚT X ---
+			const btnClear = document.getElementById('btn-clear-money');
+			if (btnClear) {
+				// Nếu có giá trị và giá trị khác 0 thì hiện, ngược lại thì ẩn
+				if (inputVal && received !== 0) {
+					btnClear.classList.remove('hidden');
+				} else {
+					btnClear.classList.add('hidden');
+				}
+			}
+			// --------------------------------
+
+			// 2. Hiển thị text tiền thừa/thiếu
+			const el = document.getElementById('change-amount');
+			el.innerText = change < 0 ? "Thiếu " + formatMoney(Math.abs(change)) : formatMoney(change);
+			el.className = change < 0 ? "text-2xl font-bold text-red-600" : "text-2xl font-bold text-green-600";
+
+			// 3. Logic đổi màu nút xác nhận
+			const btn = document.getElementById('btn-confirm-pay');
+			if (btn) {
+				if (change >= 0) {
+					btn.classList.remove('bg-gray-200', 'text-gray-400', 'shadow-none', 'bg-red-50', 'text-red-500');
+					btn.classList.add('bg-gradient-to-r', 'from-blue-600', 'to-indigo-600', 'text-white', 'shadow-lg', 'shadow-blue-500/50', 'active:scale-[0.98]', 'cart-active-pulse');
+					btn.innerHTML = `<span>XÁC NHẬN THANH TOÁN</span>`;
+				} else {
+					btn.className = "w-full p-4 rounded-xl font-bold text-lg transition-all duration-300 flex justify-center items-center gap-2 group";
+					btn.classList.add('bg-red-50', 'text-red-400', 'shadow-inner', 'border', 'border-red-100');
+					btn.innerHTML = `<span>CÒN THIẾU: ${formatMoney(Math.abs(change))}</span> <span class="animate-bounce"></span>`;
+				}
+			}
+		}
+
+		// Hàm bấm nút X
+		function clearMoneyInput() {
+			const input = document.getElementById('money-received');
+			input.value = '';       
+			input.focus();          
+			calculateChange(); // Gọi lại hàm trên để tính lại tiền và ẩn nút X đi
+		}
+		
+        function addMoney(n) { 
+			const el=document.getElementById('money-received'); 
+			el.value=(parseInt(el.value)||0)+n; 
+			calculateChange(); 
+		}
+		
+        function setExactMoney() { 
+			document.getElementById('money-received').value = cart.reduce((s,i)=>s+(i.quantity*i.finalPrice),0); 
+			calculateChange(); 
+		}
+        
+        async function processPayment() {
+			// 1. Tính toán số liệu
+			const t = cart.reduce((s, i) => s + (i.quantity * i.finalPrice), 0);
+			const inputVal = document.getElementById('money-received').value;
+			const r = parseInt(inputVal) || 0;
+
+			// Kiểm tra tiền thiếu
+			if (r < t) {
+				const missing = t - r;
+				return showAlert("Thiếu tiền", `Khách đưa thiếu ${formatMoney(missing)}. Vui lòng thu đủ tiền!`, 'error');
+			}
+
+			// 2. Xác nhận thanh toán
+			showAlert("Thanh toán", "Xác nhận thanh toán đơn hàng này?", 'confirm', async () => {
+				
+				// --- BẮT ĐẦU XỬ LÝ LƯU DB ---
+				const extra = { received_money: r, change_money: r - t };
+				
+				// A. Tạo đơn hàng
+				const { data: order, error } = await client.from('orders').insert({ 
+					staff_email: currentUserEmail, 
+					total_amount: t, 
+					note: JSON.stringify(extra),
+					returned_amount: 0 
+				}).select().single();
+
+				if (order) {
+					// B. Lưu chi tiết món
+					const items = cart.map(i => ({ 
+						order_id: order.id, 
+						product_id: i.id,
+						product_name: i.name, 
+						quantity: i.quantity, 
+						price: i.finalPrice, 
+						total: i.quantity * i.finalPrice,
+						returned_quantity: 0
+					}));
+					await client.from('order_items').insert(items);
+
+					// C. Trừ tồn kho
+					const updatePromises = cart.map(item => {
+						const originalProd = productsDB.find(p => p.id === item.id);
+						if (!originalProd) return null;
+						const newQty = Math.max(0, (originalProd.quantity || 0) - item.quantity);
+						return client.from('products').update({ quantity: newQty }).eq('id', item.id);
+					});
+					await Promise.all(updatePromises);
+
+					// D. Chuẩn bị dữ liệu in (Copy giỏ hàng ra biến riêng)
+					const printData = {
+						id: order.id,
+						time: new Date(),
+						staff: currentUserEmail,
+						items: [...cart], 
+						total: t,
+						received: r,
+						change: r - t
+					};
+
+					// --- [QUAN TRỌNG] DỌN DẸP GIỎ HÀNG NGAY LẬP TỨC ---
+					// (Đảm bảo đơn hàng được coi là hoàn tất trước khi hỏi in)
+					finishOrder(); 
+
+					// E. HIỂN THỊ THÔNG BÁO (Tùy theo cài đặt)
+					if (globalSettings.allow_print) {
+						// TRƯỜNG HỢP 1: CÓ BẬT IN -> Hỏi khách
+						showAlert(
+							"Thanh toán thành công ✅", 
+							// Thông báo rõ ràng là đã trừ kho rồi
+							`Đơn hàng #${order.id} <b>đã được lưu & trừ kho</b>.<br>Bạn có muốn in hóa đơn không?`, 
+							'confirm', 
+							() => {
+								// Nếu bấm Đồng ý -> In hóa đơn
+								printReceipt(
+									printData.id, 
+									printData.time, 
+									printData.staff, 
+									printData.items, 
+									printData.total, 
+									printData.received, 
+									printData.change
+								);
+							},
+							() => {
+								showAlert(
+									"Thanh toán thành công ✅", 
+									"Đơn hàng đã được lưu & <b>Đã trừ kho</b>!", 
+									'success'
+								);
+							}
+						);
+					} else {
+						// TRƯỜNG HỢP 2: TẮT IN -> Báo thành công & Đã trừ kho
+						showAlert(
+							"Thanh toán thành công ✅", 
+							"Đơn hàng đã được lưu & <b>Đã trừ kho</b>!", 
+							'success'
+						);
+					}
+				}
+			});
+		}
+
+		// Hàm dọn dẹp (tách ra để dùng chung)
+		function finishOrder() {
+			cart = []; // Xóa giỏ hàng
+			updateCartUI(); 
+			document.getElementById('last-scanned-card').classList.add('hidden');
+			document.getElementById('money-received').value = ''; // Xóa ô tiền khách đưa
+			calculateChange(); // Reset tiền thừa về 0
+			fetchProducts(); // Cập nhật lại tồn kho mới nhất từ server
+			backToScan(); // Quay về màn hình bán
+		}
+
+		// --- HÀM XỬ LÝ PHÍM ENTER KHI ĐĂNG NHẬP ---
+		function handleLoginKey(e) {
+			if (e.key === 'Enter') {
+				handleLogin();
+			}
+		}
+
+        // --- EXCEL & ADMIN ---
+        function openAdminScreen() { 
+			if(currentUserRole!=='admin') return showAlert("Từ chối", "Chỉ Admin mới có quyền truy cập!", 'error');
+
+			history.pushState({view: 'admin'}, "Quản lý", "#admin");
+			
+			if(html5QrcodeScanner) html5QrcodeScanner.pause(); 
+			document.getElementById('scan-screen').classList.add('hidden'); 
+			document.getElementById('admin-screen').classList.remove('hidden'); 
+			renderProductList(); 
+		}
+        function closeAdminScreen() { 
+			document.getElementById('admin-screen').classList.add('hidden'); 
+			document.getElementById('scan-screen').classList.remove('hidden'); 
+			if(html5QrcodeScanner) html5QrcodeScanner.resume();
+
+			history.back();
+		}
+        function switchAdminTab(t) {
+			// --- PHẦN 1: XỬ LÝ GIAO DIỆN (UI) ---
+			
+			// 1. Ẩn nội dung của TẤT CẢ các tab
+			document.getElementById('admin-products').classList.add('hidden');
+			document.getElementById('admin-revenue').classList.add('hidden');
+			document.getElementById('admin-users').classList.add('hidden'); // Đảm bảo ID này tồn tại bên HTML
+			
+			// 2. Reset màu nút bấm về mặc định (Xám/Trắng) cho TẤT CẢ các nút
+			['products', 'revenue', 'users', 'system'].forEach(k => {
+				document.getElementById('admin-'+k).classList.add('hidden');
+				document.getElementById('tab-'+k).className = "flex-1 py-2.5 rounded-lg font-bold bg-white text-gray-500 border hover:bg-gray-50";
+			});
+
+			document.getElementById('admin-'+t).classList.remove('hidden');
+			document.getElementById('tab-'+t).className = "flex-1 py-2.5 rounded-lg font-bold bg-blue-600 text-white shadow-sm";
+
+			// 3. Hiện nội dung tab đang chọn
+			const targetContent = document.getElementById('admin-'+t);
+			if(targetContent) targetContent.classList.remove('hidden');
+
+			// 4. Tô màu xanh cho nút đang chọn
+			const targetBtn = document.getElementById('tab-'+t);
+			if(targetBtn) targetBtn.className = "flex-1 py-2.5 rounded-lg font-bold bg-blue-600 text-white shadow-sm";
+
+
+			// --- PHẦN 2: XỬ LÝ DỮ LIỆU (DATA) ---
+
+			// Logic riêng cho Tab Nhân viên
+			if (t === 'users') {
+				fetchUserList();
+			}
+			
+			// Logic riêng cho Tab Doanh thu
+			else if (t === 'revenue') {
+				// 1. Tải số liệu tổng quan (Cards trên cùng)
+				loadRevenue(); 
+
+				// 2. [QUAN TRỌNG] Khai báo 2 biến giao diện (BẠN ĐANG THIẾU ĐOẠN NÀY)
+				const classicUI = document.getElementById('revenue-classic-ui');
+				const chartUI = document.getElementById('revenue-chart-ui');
+
+				// 3. Tự động chọn ngày hôm nay (Giữ nguyên code của bạn)
+				const dateInput = document.getElementById('filter-start');
+				if (dateInput && !dateInput.value) {
+					const today = new Date().toISOString().split('T')[0];
+					document.getElementById('filter-start').value = today;
+					document.getElementById('filter-end').value = today;
+					
+					if(document.getElementById('report-start')) {
+						 document.getElementById('report-start').value = today;
+						 document.getElementById('report-end').value = today;
+					}
+				}
+
+				// 4. Kiểm tra cài đặt để chuyển đổi giao diện
+				// (Thêm kiểm tra 'classicUI' và 'chartUI' tồn tại để tránh lỗi null)
+				if (globalSettings.enable_charts && classicUI && chartUI) {
+					// == CHẾ ĐỘ BIỂU ĐỒ ==
+					classicUI.classList.add('hidden');
+					chartUI.classList.remove('hidden');
+					
+					// Gọi hàm vẽ biểu đồ
+					// (Kiểm tra hàm tồn tại trước khi gọi để tránh crash nếu chưa copy hàm renderCharts)
+					if (typeof renderCharts === 'function') renderCharts(); 
+				} else {
+					// == CHẾ ĐỘ CŨ (HOẶC FALLBACK) ==
+					if(chartUI) chartUI.classList.add('hidden');
+					if(classicUI) classicUI.classList.remove('hidden');
+					
+					// loadRevenue(); <--- XÓA DÒNG NÀY (Vì đã gọi ở dòng đầu tiên rồi, gọi lại bị thừa)
+					viewRevenueDetail(); 
+				}
+			}
+			
+			else if (t === 'system') {
+				fetchSystemSettings();
+			}
+			
+			// Logic riêng cho Tab Hàng hóa (Nếu cần reload khi chuyển tab)
+			else if (t === 'products') {
+				// fetchProducts(); // Bật dòng này nếu muốn mỗi lần bấm vào tab Hàng hóa là tải lại danh sách
+			}
+		}
+		
+		// 2. THÊM HÀM MỚI: VẼ BIỂU ĐỒ
+		async function renderCharts() {
+			// Hủy biểu đồ cũ nếu có
+			if (myChart1) { myChart1.destroy(); myChart1 = null; }
+			if (myChart2) { myChart2.destroy(); myChart2 = null; }
+
+			const end = new Date();
+			const start = new Date();
+			start.setDate(end.getDate() - 6); // Lùi lại 6 ngày
+
+			// --- SỬA LỖI: Lấy cả biến 'error' để kiểm tra ---
+			const { data: orders, error } = await client
+				.from('orders')
+				.select('created_at, total_amount, returned_amount, order_items(product_name, quantity)')
+				.gte('created_at', start.toISOString())
+				.order('created_at', { ascending: true });
+
+			// 1. NẾU CÓ LỖI TỪ SUPABASE -> BÁO NGAY
+			if (error) {
+				console.error("Lỗi tải biểu đồ:", error);
+				// Nếu lỗi là do chưa liên kết bảng
+				if (error.message.includes("Could not find a relationship")) {
+					 showAlert("Lỗi Cấu Trúc", "Thiếu liên kết khóa ngoại giữa bảng 'orders' và 'order_items'.<br>Vui lòng chạy lại lệnh SQL tạo khóa ngoại.", 'error');
+				} else {
+					 showAlert("Lỗi Dữ Liệu", "Không thể tải dữ liệu biểu đồ: " + error.message, 'error');
+				}
+				return;
+			}
+
+			if (!orders || orders.length === 0) {
+				// Không có đơn hàng thì thôi, không vẽ
+				return;
+			}
+
+			// --- XỬ LÝ SỐ LIỆU BIỂU ĐỒ 1: DOANH THU 7 NGÀY ---
+			const days = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'];
+			let labels = [];
+			let dataRevenue = [];
+
+			for (let i = 0; i < 7; i++) {
+				let d = new Date(start);
+				d.setDate(start.getDate() + i);
+				let dayName = days[d.getDay()];
+				
+				labels.push(`${dayName} (${d.getDate()}/${d.getMonth()+1})`);
+				
+				let sum = orders
+					.filter(o => new Date(o.created_at).toDateString() === d.toDateString())
+					.reduce((acc, cur) => acc + (cur.total_amount - (cur.returned_amount || 0)), 0);
+				dataRevenue.push(sum);
+			}
+
+			// --- VẼ BIỂU ĐỒ 1 ---
+			const canvas1 = document.getElementById('chart-revenue-7days');
+			if (canvas1) {
+				const ctx1 = canvas1.getContext('2d');
+				myChart1 = new Chart(ctx1, {
+					type: 'line',
+					data: {
+						labels: labels,
+						datasets: [{
+							label: 'Doanh thu',
+							data: dataRevenue,
+							borderColor: '#4f46e5',
+							backgroundColor: 'rgba(79, 70, 229, 0.1)',
+							borderWidth: 2,
+							tension: 0.3,
+							fill: true,
+							pointBackgroundColor: '#fff',
+							pointBorderColor: '#4f46e5',
+							pointRadius: 4
+						}]
+					},
+					options: {
+						responsive: true,
+						maintainAspectRatio: false,
+						plugins: { legend: { display: false } },
+						scales: { y: { beginAtZero: true } }
+					}
+				});
+			}
+
+			// --- XỬ LÝ SỐ LIỆU BIỂU ĐỒ 2: TOP SẢN PHẨM ---
+			let productCounts = {};
+			orders.forEach(o => {
+				// Kiểm tra kỹ o.order_items có tồn tại không trước khi lặp
+				if (o.order_items && Array.isArray(o.order_items)) {
+					o.order_items.forEach(item => {
+						if (item.product_name && !item.product_name.startsWith('[Đã trả]')) {
+							productCounts[item.product_name] = (productCounts[item.product_name] || 0) + item.quantity;
+						}
+					});
+				}
+			});
+
+			let sortedProducts = Object.entries(productCounts)
+				.sort((a, b) => b[1] - a[1])
+				.slice(0, 5);
+
+			// --- VẼ BIỂU ĐỒ 2 ---
+			const canvas2 = document.getElementById('chart-top-products');
+			if (canvas2 && sortedProducts.length > 0) {
+				const ctx2 = canvas2.getContext('2d');
+				myChart2 = new Chart(ctx2, {
+					type: 'doughnut',
+					data: {
+						labels: sortedProducts.map(p => p[0]),
+						datasets: [{
+							data: sortedProducts.map(p => p[1]),
+							backgroundColor: ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'],
+							borderWidth: 0
+						}]
+					},
+					options: {
+						responsive: true,
+						maintainAspectRatio: false,
+						plugins: { 
+							legend: { position: 'right', labels: { boxWidth: 10, font: { size: 10 } } } 
+						}
+					}
+				});
+			}
+		}
+
+		// Hàm phụ trợ: Nút "Xem danh sách chi tiết" trong màn hình biểu đồ
+		function forceSwitchToClassic() {
+			// Tạm thời ẩn biểu đồ, hiện danh sách
+			document.getElementById('revenue-chart-ui').classList.add('hidden');
+			document.getElementById('revenue-classic-ui').classList.remove('hidden');
+			
+			// Load dữ liệu bảng cũ
+			const today = new Date().toISOString().split('T')[0];
+			if(!document.getElementById('filter-start').value) {
+				document.getElementById('filter-start').value = today;
+				document.getElementById('filter-end').value = today;
+			}
+			loadRevenue();
+			viewRevenueDetail();
+		}
+		
+		// Tải danh sách User
+		async function fetchUserList() {
+			document.getElementById('user-list').innerHTML = '<div class="text-center py-4 text-gray-400">⏳ Đang tải...</div>';
+			
+			// Sắp xếp: Admin lên đầu, sau đó đến người mới online
+			const { data: users, error } = await client
+				.from('app_users')
+				.select('*')
+				.order('role', { ascending: true }) 
+				.order('last_seen', { ascending: false });
+			
+			if (error) return showAlert("Lỗi", error.message, 'error');
+
+			document.getElementById('user-list').innerHTML = users.map(u => {
+				// --- LOGIC TÍNH THỜI GIAN (TIME AGO) ---
+				const now = new Date();
+				const lastSeen = new Date(u.last_seen);
+				const diffMs = now - lastSeen; // Chênh lệch tính bằng Mili-giây
+				
+				const seconds = Math.floor(diffMs / 1000);
+				const minutes = Math.floor(seconds / 60);
+				const hours   = Math.floor(minutes / 60);
+				const days    = Math.floor(hours / 24);
+				const months  = Math.floor(days / 30);
+				const years   = Math.floor(days / 365);
+
+				// 1. Xác định trạng thái Online (Nếu < 2 phút thì coi là Online)
+				const isOnline = minutes < 2;
+
+				// 2. Tạo chuỗi hiển thị thời gian thông minh
+				let timeText = "";
+				if (seconds < 60) {
+					timeText = `${Math.max(0, seconds)} giây trước`;
+				} else if (minutes < 60) {
+					timeText = `${minutes} phút trước`;
+				} else if (hours < 24) {
+					timeText = `${hours} giờ trước`;
+				} else if (days < 30) {
+					timeText = `${days} ngày trước`;
+				} else if (months < 12) {
+					timeText = `${months} tháng trước`;
+				} else {
+					timeText = `${years} năm trước`;
+				}
+
+				// --- RENDER GIAO DIỆN ---
+				const statusHtml = isOnline 
+					? `<span class="bg-green-100 text-green-700 px-2 py-0.5 rounded text-[10px] font-bold border border-green-200 inline-flex items-center gap-1 w-fit">
+						<span class="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse"></span> Online
+					   </span>`
+					: `<span class="bg-gray-100 text-gray-500 px-2 py-0.5 rounded text-[10px] font-bold border inline-flex items-center w-fit">
+						Offline ${timeText}
+					   </span>`;
+
+				// Các nút chức năng
+				const lockBtn = u.is_locked 
+					? `<button onclick="setUserLock('${u.email}', false)" class="bg-green-100 text-green-600 px-3 py-2 rounded font-bold text-xs border border-green-200">Mở</button>`
+					: `<button onclick="setUserLock('${u.email}', true)" class="bg-gray-100 text-gray-500 px-3 py-2 rounded font-bold text-xs border border-gray-200">Khóa</button>`;
+
+				let roleBtn = "";
+				if (u.role === 'admin') {
+					roleBtn = `<button onclick="changeUserRole('${u.email}', 'staff')" class="bg-purple-100 text-purple-600 px-3 py-2 rounded font-bold text-xs border border-purple-200">⬇️ Hạ cấp</button>`;
+				} else {
+					roleBtn = `<button onclick="changeUserRole('${u.email}', 'admin')" class="bg-yellow-100 text-yellow-700 px-3 py-2 rounded font-bold text-xs border border-yellow-200">⭐ Bổ nhiệm</button>`;
+				}
+
+				const cardBorder = u.role === 'admin' ? "border-purple-300 ring-1 ring-purple-100" : "border-gray-200";
+				const bgAvatar = u.role === 'admin' ? "bg-purple-100 text-purple-600" : "bg-blue-50 text-blue-600";
+
+				return `
+				<div class="bg-white p-3 rounded-xl border ${cardBorder} shadow-sm flex flex-col gap-3 ${u.is_locked ? 'opacity-60 bg-gray-50' : ''}">
+					<div class="flex justify-between items-start">
+						<div class="flex items-center gap-3">
+							<div class="w-10 h-10 rounded-full ${bgAvatar} flex items-center justify-center font-bold text-lg border">
+								${u.email.charAt(0).toUpperCase()}
+							</div>
+							<div>
+								<div class="font-bold text-gray-800 text-sm flex items-center gap-1">
+									${u.email}
+									${u.role === 'admin' ? '<span class="text-[9px] bg-purple-600 text-white px-1.5 rounded-full">ADMIN</span>' : ''}
+								</div>
+								<div class="mt-1">${statusHtml}</div>
+							</div>
+						</div>
+					</div>
+					
+					<div class="flex gap-2 justify-end border-t pt-2 border-dashed">
+						<button onclick="showUserQR('${u.email}')" class="bg-gray-800 text-white px-3 py-2 rounded font-bold text-xs border border-gray-600 shadow-sm">🪪 QR Login</button>
+						${roleBtn}
+						${lockBtn}
+						<button onclick="kickUser('${u.email}')" class="bg-red-50 text-red-600 px-3 py-2 rounded font-bold text-xs border border-red-100">Kick ⚡</button>
+					</div>
+				</div>
+				`;
+			}).join('');
+		}
+
+		// Biến tạm để lưu email đang muốn tạo QR
+		let pendingQREmail = "";
+
+		// 1. Hàm được gọi khi bấm nút "QR" ở danh sách nhân viên
+		function showUserQR(email) {
+			pendingQREmail = email; // Lưu lại email
+			
+			// Reset ô nhập và hiện Modal
+			document.getElementById('qr-password-input').value = "";
+			document.getElementById('password-input-modal').classList.remove('hidden');
+			
+			// Tự động focus vào ô nhập cho tiện
+			setTimeout(() => document.getElementById('qr-password-input').focus(), 100);
+		}
+
+		// 2. Hàm đóng Modal nhập mật khẩu
+		function closePassModal() {
+			document.getElementById('password-input-modal').classList.add('hidden');
+			pendingQREmail = ""; // Xóa email tạm
+		}
+
+		// 3. Hàm xử lý khi bấm "Tạo Mã" (Logic chính nằm ở đây)
+		function submitQRPassword() {
+			const pass = document.getElementById('qr-password-input').value.trim();
+			
+			if (!pass) {
+				showAlert("Lỗi", "Vui lòng nhập mật khẩu!", "error");
+				return;
+			}
+
+			// --- SỬA LỖI TẠI ĐÂY ---
+			
+			// 1. Lấy email ra biến cục bộ TRƯỚC
+			const email = pendingQREmail;
+
+			// 2. Sau đó mới đóng Modal (Lúc này pendingQREmail bị xóa cũng không sao)
+			closePassModal();
+
+			// -----------------------
+
+			const jsonString = JSON.stringify({ action: "login", email: email, pass: pass });
+			
+			const modal = document.getElementById('qr-modal');
+			const container = document.getElementById('qr-code-container');
+			const emailLabel = document.getElementById('qr-user-email');
+
+			if (!modal || !container) return;
+
+			// Hiện Modal hiển thị QR
+			modal.classList.remove('hidden');
+			emailLabel.innerText = email;
+			container.innerHTML = ""; 
+
+			setTimeout(() => {
+				// Cấu hình QR Code
+				new QRCode(container, {
+					text: jsonString,
+					width: 250,
+					height: 250,
+					colorDark: "#000000",
+					colorLight: "#ffffff",
+					correctLevel: QRCode.CorrectLevel.H,
+					
+					// Logo (Base64 hoặc link ảnh)
+					logo: "mini_pos.png", 
+					logoWidth: 60,
+					logoHeight: 60,
+					logoBackgroundColor: '#ffffff',
+					logoBackgroundTransparent: false
+				});
+			}, 50);
+		}
+
+		function closeQRModal() {
+			const modal = document.getElementById('qr-modal');
+			if(modal) modal.classList.add('hidden');
+		}
+
+		function printQR() {
+			const container = document.getElementById('qr-code-container');
+			if(!container) return;
+			
+			const printContent = container.innerHTML;
+			const email = document.getElementById('qr-user-email').innerText;
+			
+			const win = window.open('', '', 'height=600,width=600');
+			win.document.write('<html><head><title>In Thẻ</title><style>body{text-align:center; font-family: sans-serif; padding:20px;} img{margin:0 auto; display:block;}</style></head><body>');
+			win.document.write(`<h2>THẺ NHÂN VIÊN</h2>${printContent}<h3>${email}</h3>`);
+			win.document.write('</body></html>');
+			win.document.close();
+			win.print();
+		}
+
+		function downloadQR() {
+			const container = document.getElementById('qr-code-container');
+			const email = document.getElementById('qr-user-email').innerText || "user";
+			
+			// Tìm thẻ Canvas (Thư viện mới dùng Canvas để vẽ cả Logo)
+			const canvas = container.querySelector('canvas');
+
+			if (canvas) {
+				// Chuyển Canvas thành ảnh
+				const imageUrl = canvas.toDataURL("image/png");
+
+				// Tải về
+				const link = document.createElement('a');
+				link.href = imageUrl;
+				link.download = `QR_${email}.png`;
+				document.body.appendChild(link);
+				link.click();
+				document.body.removeChild(link);
+			} else {
+				// Fallback: Nếu thư viện lỡ render ra img (tùy trình duyệt)
+				const img = container.querySelector('img');
+				if(img) {
+					const link = document.createElement('a');
+					link.href = img.src;
+					link.download = `QR_${email}.png`;
+					document.body.appendChild(link);
+					link.click();
+					document.body.removeChild(link);
+				} else {
+					showAlert("Lỗi", 'Chưa có mã QR để lưu!', "error");
+				}
+			}
+		}
+
+		// --- HÀM BỔ NHIỆM / HẠ CẤP ---
+		async function changeUserRole(email, newRole) {
+			// 1. Chặn không cho tự thay đổi quyền của chính mình (tránh lỡ tay tự hạ cấp rồi mất quyền Admin)
+			if (email === currentUserEmail) {
+				return showAlert("Từ chối", "Bạn không thể tự thay đổi quyền của chính mình!", 'error');
+			}
+
+			// 2. Xác định nội dung thông báo
+			const title = newRole === 'admin' ? "Bổ nhiệm Quản lý" : "Hạ cấp Nhân viên";
+			const msg = newRole === 'admin' 
+				? `Bạn muốn thăng chức cho ${email} thành ADMIN? (Họ sẽ có toàn quyền quản lý).`
+				: `Bạn muốn hạ cấp ${email} xuống thành NHÂN VIÊN? (Họ sẽ mất quyền truy cập trang Quản lý).`;
+
+			// 3. Hỏi xác nhận
+			showAlert(title, msg, 'confirm', async () => {
+				// 4. Cập nhật vào Database
+				const { error } = await client.from('app_users').update({ role: newRole }).eq('email', email);
+				
+				if (error) {
+					showAlert("Lỗi", "Không thể cập nhật: " + error.message, 'error');
+				} else {
+					showAlert("Thành công", `Đã cập nhật quyền cho ${email}`, 'success');
+					fetchUserList(); // Tải lại danh sách để thấy thay đổi
+				}
+			});
+		}
+
+		// Hàm Khóa/Mở khóa
+		async function setUserLock(email, lockStatus) {
+			if (email === currentUserEmail) return showAlert("Lỗi", "Không thể tự khóa chính mình!", 'error');
+			
+			showAlert(lockStatus ? "Khóa TK" : "Mở khóa", `Bạn muốn ${lockStatus ? 'KHÓA' : 'MỞ KHÓA'} tài khoản ${email}?`, 'confirm', async () => {
+				await client.from('app_users').update({ is_locked: lockStatus }).eq('email', email);
+				fetchUserList();
+				showAlert("Thành công", "Đã cập nhật trạng thái.", 'success');
+			});
+		}
+
+		// Hàm Kick (Buộc đăng xuất)
+		async function kickUser(email) {
+			if (email === currentUserEmail) return showAlert("Lỗi", "Không thể tự kick chính mình!", 'error');
+
+			showAlert("Kích tài khoản", `Buộc tài khoản ${email} đăng xuất ngay lập tức?`, 'confirm', async () => {
+				await client.from('app_users').update({ force_logout: true }).eq('email', email);
+				fetchUserList();
+				showAlert("Đã Kick", "Người dùng sẽ bị văng ra trong vòng 30 giây.", 'success');
+			});
+		}
+		
+		// --- HÀM XEM CHI TIẾT DOANH SỐ (MỚI) ---
+		async function viewRevenueDetail() {
+			const startVal = document.getElementById('filter-start').value;
+			const endVal = document.getElementById('filter-end').value;
+
+			if (!startVal || !endVal) return showAlert("Thiếu ngày", "Vui lòng chọn ngày bắt đầu và kết thúc", 'error');
+
+			const d1 = new Date(startVal);
+			const d2 = new Date(endVal);
+			
+			if (d2 < d1) return showAlert("Lỗi ngày", "Ngày kết thúc phải lớn hơn hoặc bằng ngày bắt đầu", 'error');
+			
+			// Giới hạn 31 ngày
+			const diffTime = Math.abs(d2 - d1);
+			const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
+			if (diffDays > 31) return showAlert("Giới hạn", "Vui lòng chỉ xem tối đa 31 ngày để đảm bảo tốc độ.", 'error');
+
+			const startISO = new Date(startVal + 'T00:00:00').toISOString();
+			const endISO = new Date(endVal + 'T23:59:59').toISOString();
+
+			document.getElementById('revenue-list').innerHTML = '<div class="text-center py-8 text-gray-400 text-xs animate-pulse">⏳ Đang tải dữ liệu...</div>';
+
+			// Lấy dữ liệu từ Server
+			const { data: orders, error } = await client
+				.from('orders')
+				.select('*')
+				.gte('created_at', startISO)
+				.lte('created_at', endISO)
+				.order('created_at', { ascending: false });
+
+			if (error) {
+				document.getElementById('revenue-list').innerHTML = '<div class="text-center text-red-400 text-xs">Lỗi tải dữ liệu</div>';
+				return showAlert("Lỗi", error.message, 'error');
+			}
+
+			if (!orders || orders.length === 0) {
+				document.getElementById('revenue-list').innerHTML = '<div class="text-center py-10 text-gray-400 flex flex-col items-center"><span class="text-4xl mb-2">📭</span><span>Không có đơn hàng nào</span></div>';
+				document.getElementById('filter-count').innerText = "0 đơn";
+				document.getElementById('filter-sum').innerText = "0đ";
+				return;
+			}
+
+			// --- [QUAN TRỌNG] TÍNH TỔNG DOANH THU THỰC TẾ ---
+			// Công thức: Tổng = (Tổng tiền đơn - Tiền đã hoàn)
+			const total = orders.reduce((sum, o) => sum + (o.total_amount - (o.returned_amount || 0)), 0);
+			
+			document.getElementById('filter-count').innerText = `${orders.length} đơn`;
+			document.getElementById('filter-sum').innerText = formatMoney(total); // Cập nhật số tiền chuẩn xác lên giao diện
+
+			// Render Danh sách chi tiết
+			document.getElementById('revenue-list').innerHTML = orders.map(o => {
+				const noteSafe = encodeURIComponent(o.note || "");
+				
+				// Tính tiền thực của đơn này để hiển thị trong danh sách
+				const realAmount = o.total_amount - (o.returned_amount || 0);
+				
+				// Hiển thị thêm dòng ghi chú nếu có trả hàng
+				const refundNote = (o.returned_amount && o.returned_amount > 0) 
+					? `<div class="text-[9px] text-red-500 font-bold bg-red-50 px-2 py-0.5 rounded inline-block text-right mt-1 border border-red-100">↩ Đã hoàn: -${formatMoney(o.returned_amount)}</div>` 
+					: '';
+
+				// Nếu có hoàn tiền thì đổi màu giá tiền sang màu cam để chú ý
+				const priceColor = (o.returned_amount > 0) ? "text-orange-600" : "text-blue-600";
+
+				return `
+				<div onclick="viewHistoryDetail(${o.id}, ${o.total_amount}, '${o.created_at}', '${noteSafe}')" class="bg-white p-3 rounded-xl border border-gray-100 shadow-sm flex justify-between items-center active:bg-gray-50 transition-colors cursor-pointer mb-2">
+					<div class="flex items-center gap-3">
+						<div class="w-10 h-10 rounded-full bg-indigo-50 text-indigo-600 flex items-center justify-center font-bold text-xs">#${o.id}</div>
+						<div>
+							<div class="text-xs font-bold text-gray-700">${new Date(o.created_at).toLocaleString('vi-VN')}</div>
+							<div class="text-[10px] text-gray-400 flex items-center gap-1">
+								<span class="w-1.5 h-1.5 rounded-full bg-green-500"></span> ${o.staff_email.split('@')[0]}
+							</div>
+						</div>
+					</div>
+					<div class="text-right flex flex-col items-end">
+						<div class="text-sm font-bold ${priceColor} font-display">${formatMoney(realAmount)}</div>
+						${refundNote}
+					</div>
+				</div>
+				`;
+			}).join('');
+		}
+		
+		// --- HÀM XUẤT BÁO CÁO EXCEL ---
+		async function exportRevenueReport() {
+			const startStr = document.getElementById('filter-start').value;
+			const endStr = document.getElementById('filter-end').value;
+
+			if (!startStr || !endStr) return showAlert("Thiếu thông tin", "Vui lòng chọn ngày bắt đầu và kết thúc!", 'error');
+
+			// Tạo thời gian chuẩn ISO (Từ 00:00:00 ngày đầu -> 23:59:59 ngày cuối)
+			const startDate = new Date(startStr + 'T00:00:00').toISOString();
+			const endDate = new Date(endStr + 'T23:59:59').toISOString();
+
+			showAlert("Đang xử lý", "Đang tải dữ liệu báo cáo...", 'info');
+
+			// Lấy đơn hàng KÈM THEO chi tiết sản phẩm (dùng Query Relation của Supabase)
+			const { data: orders, error } = await client
+				.from('orders')
+				.select('*, order_items(*)') 
+				.gte('created_at', startDate)
+				.lte('created_at', endDate)
+				.order('created_at', { ascending: false });
+
+			if (error) return showAlert("Lỗi", error.message, 'error');
+			if (!orders || orders.length === 0) return showAlert("Trống", "Không có đơn hàng nào trong khoảng thời gian này.", 'info');
+
+			// Chế biến dữ liệu phẳng để đưa vào Excel
+			const excelData = [];
+			let totalRevenuePeriod = 0;
+
+			orders.forEach(order => {
+				const orderDate = new Date(order.created_at).toLocaleString('vi-VN');
+				const staffName = order.staff_email.split('@')[0];
+				
+				// Nếu đơn hàng có sản phẩm con
+				if (order.order_items && order.order_items.length > 0) {
+					order.order_items.forEach(item => {
+						excelData.push({
+							"Mã Đơn": order.id,
+							"Ngày Giờ": orderDate,
+							"Nhân Viên": staffName,
+							"Tên Sản Phẩm": item.product_name,
+							"Số Lượng": item.quantity,
+							"Đơn Giá": item.price,
+							"Thành Tiền (SP)": item.total,
+							"Tổng Đơn Hàng": "" // Để trống cho đẹp, đỡ rối mắt
+						});
+					});
+					// Thêm 1 dòng tổng kết đơn (tùy chọn, để dễ nhìn trong Excel)
+					excelData.push({
+						"Mã Đơn": `Tổng #${order.id}`,
+						"Ngày Giờ": "", "Nhân Viên": "", "Tên Sản Phẩm": "---", "Số Lượng": "", "Đơn Giá": "",
+						"Thành Tiền (SP)": "",
+						"Tổng Đơn Hàng": order.total_amount
+					});
+				} else {
+					// Trường hợp hiếm: đơn lỗi không có chi tiết
+					excelData.push({
+						"Mã Đơn": order.id,
+						"Ngày Giờ": orderDate,
+						"Nhân Viên": staffName,
+						"Tên Sản Phẩm": "(Không có chi tiết)",
+						"Số Lượng": 0, "Đơn Giá": 0, "Thành Tiền (SP)": 0,
+						"Tổng Đơn Hàng": order.total_amount
+					});
+				}
+				totalRevenuePeriod += order.total_amount;
+			});
+
+			// Thêm dòng tổng doanh thu cuối cùng của cả đợt
+			excelData.push({}); // Dòng trống cách ra
+			excelData.push({
+				"Mã Đơn": "TỔNG CỘNG",
+				"Tổng Đơn Hàng": totalRevenuePeriod
+			});
+
+			// Xuất file bằng SheetJS
+			const ws = XLSX.utils.json_to_sheet(excelData);
+			
+			// Chỉnh độ rộng cột cho đẹp
+			ws['!cols'] = [{wch:10}, {wch:20}, {wch:15}, {wch:30}, {wch:10}, {wch:15}, {wch:15}, {wch:15}];
+
+			const wb = XLSX.utils.book_new();
+			XLSX.utils.book_append_sheet(wb, ws, "Bao_Cao_Chi_Tiet");
+			
+			// Tên file: DoanhThu_TuNgay_DenNgay.xlsx
+			XLSX.writeFile(wb, `DoanhThu_${startStr}_${endStr}.xlsx`);
+			
+			closeAlert(); // Tắt thông báo
+		}
+		
+        function renderProductList(search = "") {
+			document.getElementById('admin-product-list').innerHTML = productsDB
+				.filter(p => p.name.toLowerCase().includes(search.toLowerCase()) || 
+							 (p.item_code && p.item_code.toLowerCase().includes(search.toLowerCase())) || 
+							 (p.barcode && p.barcode.includes(search)))
+				.map(p => {
+					// Xử lý hiển thị giá
+					let priceDisplay = `<div class="text-xs font-bold text-blue-600 mt-1">${formatMoney(p.price)}</div>`;
+					if (p.sale_price && p.sale_price < p.price) {
+						priceDisplay = `<div class="mt-1">
+											<span class="text-gray-400 line-through text-[10px] mr-1">${formatMoney(p.price)}</span>
+											<span class="text-red-600 font-bold text-xs">${formatMoney(p.sale_price)}</span>
+										</div>`;
+					}
+
+					// Xử lý trạng thái khóa
+					const lockedClass = p.is_locked ? "locked-item" : "";
+					const lockIcon = p.is_locked ? "🔓" : "🔒";
+					const lockBtnColor = p.is_locked ? "bg-gray-500" : "bg-orange-500";
+
+					// --- HTML TRẢ VỀ (ĐÃ SỬA HÀNG DỌC) ---
+					return `
+					<div class="bg-white p-3 rounded-lg border flex justify-between items-center shadow-sm ${lockedClass}">
+						
+						<div class="flex items-center gap-3 flex-1">
+							<img src="${p.image || PLACEHOLDER_IMG}" class="w-12 h-12 rounded bg-gray-100 object-cover shrink-0">
+							<div>
+								<div class="font-bold text-gray-800 text-sm line-clamp-1">
+									${p.name} 
+									${p.is_locked ? '<span class="text-[10px] text-red-500 bg-red-100 px-1 rounded ml-1">(Đã khóa)</span>' : ''}
+								</div>
+								
+								<div class="flex flex-wrap gap-1 text-[10px] mt-1">
+									<span class="bg-gray-100 px-1 rounded text-gray-500 border">Mã: ${p.barcode || '---'}</span>
+									<span class="bg-gray-100 px-1 rounded text-gray-500 border">Item: ${p.item_code || '---'}</span>
+									<span class="bg-gray-100 px-1 rounded text-gray-500 border">ĐVT: ${p.unit || '---'}</span>
+									<span class="bg-purple-100 text-purple-700 px-1 rounded font-bold border border-purple-200">Kho: ${p.quantity || 0}</span>
+								</div>
+								
+								${priceDisplay}
+							</div>
+						</div>
+
+						<div class="flex flex-col gap-2 ml-3 shrink-0 py-1">
+							<button onclick="toggleLock(${p.id}, ${p.is_locked})" class="${lockBtnColor} text-white w-9 h-9 rounded-lg flex items-center justify-center shadow-sm transition active:scale-90">
+								${lockIcon}
+							</button>
+							<button onclick="openProductModal(${p.id})" class="text-blue-600 bg-blue-50 border border-blue-100 w-9 h-9 rounded-lg flex items-center justify-center transition active:scale-90">
+								✏️
+							</button>
+							<button onclick="deleteProduct(${p.id})" class="text-red-600 bg-red-50 border border-red-100 w-9 h-9 rounded-lg flex items-center justify-center transition active:scale-90">
+								🗑
+							</button>
+						</div>
+
+					</div>`;
+				}).join('');
+		}
+        async function toggleLock(id, status) {
+            showAlert(status ? "Mở khóa" : "Khóa sản phẩm", status ? "Bạn muốn mở bán lại?" : "Tạm ngưng bán món này?", 'confirm', async () => {
+                await client.from('products').update({ is_locked: !status }).eq('id', id); fetchProducts();
+            });
+        }
+        async function deleteProduct(id) {
+            showAlert("Xóa sản phẩm", "Hành động này không thể hoàn tác. Xóa?", 'confirm', async () => {
+                await client.from('products').delete().eq('id', id); fetchProducts();
+            });
+        }
+        function downloadTemplate() { 
+			// Thêm cột "Tồn kho" vào tiêu đề và dữ liệu mẫu
+			const data = [
+				["Mã vạch", "Mã Item", "Tên sản phẩm", "Giá bán", "Giá khuyến mãi", "Đơn vị", "Tồn kho", "Link Ảnh"], 
+				["893...", "NC01", "Ví dụ: Nước ngọt", "10000", "8000", "Chai", "100", ""]
+			]; 
+			
+			const wb = XLSX.utils.book_new(); 
+			const ws = XLSX.utils.aoa_to_sheet(data); 
+			
+			// Chỉnh độ rộng cột cho dễ nhìn (Tùy chọn)
+			ws['!cols'] = [{wch:15}, {wch:10}, {wch:30}, {wch:10}, {wch:10}, {wch:10}, {wch:10}, {wch:20}];
+
+			XLSX.utils.book_append_sheet(wb, ws, "Mau_Nhap_Hang"); 
+			XLSX.writeFile(wb, "Mau_Nhap_Hang_POS.xlsx"); 
+		}
+        async function handleExcelUpload(e) {
+			const file = e.target.files[0]; 
+			if(!file) return;
+
+			const reader = new FileReader();
+			reader.onload = async function(e) {
+				const data = new Uint8Array(e.target.result); 
+				const workbook = XLSX.read(data, {type: 'array'}); 
+				const sheetName = workbook.SheetNames[0]; 
+				const worksheet = workbook.Sheets[sheetName]; 
+				const jsonData = XLSX.utils.sheet_to_json(worksheet);
+
+				if(jsonData.length === 0) return showAlert("Lỗi", "File không có dữ liệu!", 'error');
+
+				// --- CẬP NHẬT: Thêm trường quantity (Tồn kho) ---
+				const productsToInsert = jsonData.map(row => ({ 
+					name: row["Tên sản phẩm"] || "Mới", 
+					price: parseInt(row["Giá bán"]) || 0, 
+					sale_price: row["Giá khuyến mãi"] ? parseInt(row["Giá khuyến mãi"]) : null, 
+					barcode: row["Mã vạch"] ? String(row["Mã vạch"]) : null, 
+					item_code: row["Mã Item"] ? String(row["Mã Item"]) : null, 
+					unit: row["Đơn vị"] || "Cái", 
+					image: row["Link Ảnh"] || "",
+					
+					// Đọc cột "Tồn kho", nếu không có hoặc để trống thì mặc định là 0
+					quantity: parseInt(row["Tồn kho"]) || 0 
+				}));
+
+				showAlert("Nhập Excel", `Tìm thấy ${productsToInsert.length} sản phẩm. Tiến hành nhập?`, 'confirm', async () => {
+					const { error } = await client.from('products').insert(productsToInsert);
+					
+					if(error) {
+						showAlert("Lỗi", error.message, 'error'); 
+					} else { 
+						showAlert("Thành công", "Đã nhập hàng và kho thành công!", 'success'); 
+						fetchProducts(); 
+					}
+					document.getElementById('excel-upload').value = "";
+				});
+			}; 
+			reader.readAsArrayBuffer(file);
+		}
+
+		async function openHistory() {
+			document.getElementById('history-modal').classList.remove('hidden');
+
+			// 1. Lấy 20 đơn gần nhất
+			let { data: orders, error } = await client
+				.from('orders')
+				.select('*')
+				.order('created_at', { ascending: false })
+				.limit(20);
+
+			// Fallback nếu lỗi
+			if (error) {
+				const res = await client.from('orders').select('*').limit(20);
+				orders = res.data;
+			}
+
+			// 2. Render danh sách (Logic đồng bộ với Admin)
+			document.getElementById('history-list').innerHTML = (orders || []).map(o => {
+				const noteSafe = encodeURIComponent(o.note || "");
+				
+				// --- LOGIC TÍNH TOÁN (Giống bên Admin) ---
+				// Lấy số tiền đã hoàn lại (nếu có)
+				const returnedAmt = o.returned_amount || 0;
+				
+				// Tính doanh thu thực tế của đơn này
+				const realTotal = o.total_amount - returnedAmt;
+
+				// --- LOGIC HIỂN THỊ ---
+				// Nếu có hoàn tiền: Hiện thêm tag màu đỏ và đổi màu giá tiền
+				const refundTag = returnedAmt > 0 
+					? `<div class="text-[10px] text-red-500 font-bold bg-red-50 px-2 py-0.5 rounded inline-block text-right mt-1 border border-red-100">↩ Đã hoàn: -${formatMoney(returnedAmt)}</div>` 
+					: '';
+				
+				const priceColor = returnedAmt > 0 ? "text-orange-600" : "text-blue-600";
+
+				return `
+				<div onclick="viewHistoryDetail(${o.id}, ${o.total_amount}, '${o.created_at}', '${noteSafe}')" 
+					 class="bg-white p-3 border rounded-xl shadow-sm flex justify-between items-center cursor-pointer hover:bg-blue-50 transition mb-2">
+					
+					<div class="flex items-center gap-3">
+						<div class="w-10 h-10 rounded-full bg-gray-100 text-gray-600 flex items-center justify-center font-bold text-xs border border-gray-200">
+							#${o.id}
+						</div>
+						<div>
+							<div class="text-xs font-bold text-gray-700">${new Date(o.created_at || Date.now()).toLocaleString('vi-VN')}</div>
+							<div class="text-[10px] text-gray-400 mt-0.5 flex items-center gap-1">
+								<span class="w-1.5 h-1.5 rounded-full bg-green-500"></span>
+								${o.staff_email ? o.staff_email.split('@')[0] : 'N/A'}
+							</div>
+						</div>
+					</div>
+
+					<div class="text-right flex flex-col items-end">
+						<div class="font-bold ${priceColor} text-lg font-display">${formatMoney(realTotal)}</div>
+						${refundTag}
+					</div>
+					
+				</div>`;
+			}).join('');
+		}
+
+		// --- LOGIC TRẢ HÀNG MỚI ---
+		let currentReturnItem = null; // Biến tạm lưu thông tin món hàng đang trả
+
+		async function viewHistoryDetail(id, totalCached, time, noteEncoded) {
+			currentHistoryOrderId = id; 
+
+			document.getElementById('history-detail-panel').classList.remove('hidden');
+			document.getElementById('hist-detail-id').innerText = `Đơn hàng #${id}`;
+			document.getElementById('hist-detail-time').innerText = new Date(time).toLocaleString('vi-VN');
+
+			// 1. Tải thông tin đơn hàng mới nhất từ DB
+			const { data: orderData } = await client
+				.from('orders')
+				.select('returned_amount, total_amount')
+				.eq('id', id)
+				.single();
+			
+			const currentTotal = orderData ? orderData.total_amount : totalCached;
+			const returnedAmt = orderData ? (orderData.returned_amount || 0) : 0;
+			const realRevenue = currentTotal - returnedAmt;
+
+			// 2. Xử lý ghi chú
+			let received = 0, change = 0;
+			try { 
+				const noteDecoded = decodeURIComponent(noteEncoded); 
+				if(noteDecoded) { 
+					const extra = JSON.parse(noteDecoded); 
+					received = extra.received_money; 
+					change = extra.change_money; 
+				} 
+			} catch(e) {}
+
+			// 3. --- QUAN TRỌNG: PHẢI TẢI DANH SÁCH MÓN (items) TRƯỚC ---
+			const { data: items } = await client.from('order_items').select('*').eq('order_id', id);
+
+			// 4. --- SAU ĐÓ MỚI TẠO FOOTER (VÌ NÚT IN CẦN BIẾN items) ---
+			const footerHtml = `
+				<div class="flex justify-between text-sm">
+					<span class="text-gray-500">Tổng tiền ban đầu:</span>
+					<span class="font-bold text-gray-800">${formatMoney(currentTotal)}</span>
+				</div>
+
+				${returnedAmt > 0 ? `
+				<div class="flex justify-between text-sm text-red-600 bg-red-50 px-2 py-1 rounded border border-red-100 -mx-2">
+					<span class="font-bold">↩ Đã hoàn tiền:</span>
+					<span class="font-bold">-${formatMoney(returnedAmt)}</span>
+				</div>
+				<div class="flex justify-between text-sm pt-1 pb-1">
+					<span class="text-indigo-600 font-bold">💰 Doanh thu thực:</span>
+					<span class="font-bold text-indigo-700 text-lg">${formatMoney(realRevenue)}</span>
+				</div>
+				<div class="border-t border-gray-200 my-1"></div>
+				` : ''}
+
+				<div class="flex justify-between text-sm mt-1">
+					<span class="text-gray-500">Khách đưa:</span>
+					<span class="font-bold text-blue-600">${received ? formatMoney(received) : '---'}</span>
+				</div>
+				<div class="flex justify-between text-lg pt-2 border-t border-dashed border-gray-300 mt-2">
+					<span class="font-bold text-orange-600">Tiền thối lại:</span>
+					<span class="font-bold text-orange-600">${change ? formatMoney(change) : '---'}</span>
+				</div>
+
+				<button onclick="printHistoryOrder(${id}, '${time}', '${encodeURIComponent(JSON.stringify(items))}', ${currentTotal}, ${received}, ${change})" 
+						class="w-full mt-3 bg-gray-800 text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2 shadow-lg active:scale-95 transition-transform">
+					🖨️ IN HÓA ĐƠN
+				</button>
+			`;
+			
+			// Gán HTML vào khung footer
+			document.getElementById('hist-detail-footer').innerHTML = footerHtml;
+
+			// 5. Hiển thị danh sách món (Code cũ)
+			document.getElementById('hist-detail-items').innerHTML = items.map(i => {
+				let originalProd = null;
+				if (i.product_id) {
+					 originalProd = productsDB.find(p => p.id === i.product_id);
+				}
+				if (!originalProd) {
+					 originalProd = productsDB.find(p => p.name === i.product_name) || {};
+				}
+
+				const barcode = originalProd.barcode || '---';
+				const unit = originalProd.unit || 'Cái';
+				
+				const returned = i.returned_quantity || 0;
+				const canReturn = i.quantity - returned;
+				const isFullyReturned = canReturn <= 0;
+
+				const returnBtn = isFullyReturned 
+					? `<span class="text-[10px] bg-gray-200 text-gray-500 px-2 py-1 rounded font-bold">Đã trả hết</span>`
+					: `<button onclick="openReturnModal(${i.id}, '${i.product_name}', ${canReturn}, ${i.price}, ${originalProd ? originalProd.id : 'null'})" class="text-[10px] bg-red-50 text-red-600 border border-red-200 px-2 py-1 rounded font-bold hover:bg-red-100 active:scale-95">↩ Trả hàng</button>`;
+
+				const returnedInfo = returned > 0 ? `<div class="text-[10px] text-red-500 font-bold mt-0.5 bg-red-50 inline-block px-1 rounded border border-red-100">⚠️ Đã trả: ${returned}/${i.quantity}</div>` : '';
+
+				return `
+					<tr>
+						<td class="py-2">
+							<div class="font-bold text-gray-800">${i.product_name}</div>
+							<div class="text-[10px] text-gray-500">Mã: ${barcode} | ĐVT: ${unit}</div>
+							${returnedInfo}
+						</td>
+						<td class="text-right font-bold align-top py-2">x${i.quantity}</td>
+						<td class="text-right text-xs align-top py-2">
+							<div>${formatMoney(i.price)}</div>
+							<div class="mt-1">${returnBtn}</div>
+						</td>
+						<td class="text-right font-bold text-blue-600 align-top py-2">${formatMoney(i.total)}</td>
+					</tr>`;
+			}).join('');
+		}
+
+		// --- CÁC HÀM XỬ LÝ TRẢ HÀNG ---
+
+		function openReturnModal(itemId, name, maxQty, price, prodId) {
+			currentReturnItem = { itemId, name, maxQty, price, prodId };
+			
+			document.getElementById('return-modal').classList.remove('hidden');
+			document.getElementById('return-item-name').innerText = name;
+			document.getElementById('return-max-qty').innerText = maxQty;
+			
+			// Reset input về 1
+			const input = document.getElementById('return-qty-input');
+			input.value = 1;
+			input.max = maxQty;
+			
+			updateRefundAmount();
+		}
+
+		function closeReturnModal() {
+			document.getElementById('return-modal').classList.add('hidden');
+			currentReturnItem = null;
+		}
+
+		function adjustReturnQty(delta) {
+			const input = document.getElementById('return-qty-input');
+			let newVal = parseInt(input.value) + delta;
+			if (newVal < 1) newVal = 1;
+			if (newVal > currentReturnItem.maxQty) newVal = currentReturnItem.maxQty;
+			
+			input.value = newVal;
+			updateRefundAmount();
+		}
+
+		function updateRefundAmount() {
+			const qty = parseInt(document.getElementById('return-qty-input').value) || 0;
+			const total = qty * currentReturnItem.price;
+			document.getElementById('return-refund-amt').innerText = formatMoney(total);
+		}
+
+		// Hàm Xử Lý Logic Chính
+		async function confirmReturn() {
+			// 1. Kiểm tra an toàn
+			if (!currentReturnItem) return;
+
+			// 2. [QUAN TRỌNG] Lưu thông tin vào biến cục bộ ngay lập tức
+			// Vì lát nữa gọi closeReturnModal() thì currentReturnItem sẽ bị null
+			const item = currentReturnItem; 
+
+			const qtyToReturn = parseInt(document.getElementById('return-qty-input').value);
+			
+			// Validate
+			if (qtyToReturn <= 0 || qtyToReturn > item.maxQty) {
+				return showAlert("Lỗi", "Số lượng trả không hợp lệ!", "error");
+			}
+
+			// Tính toán số tiền hoàn
+			const refundMoney = formatMoney(qtyToReturn * item.price);
+			
+			// 3. Đóng modal (Lúc này currentReturnItem sẽ thành null, nhưng ta đã có biến 'item')
+			closeReturnModal(); 
+
+			// 4. Hiện thông báo xác nhận
+			showAlert("Xác nhận trả hàng", 
+				`Nhận lại <b>${qtyToReturn}</b> sản phẩm "${item.name}".<br>
+				 Hoàn tiền cho khách: <b class="text-red-600 text-xl">${refundMoney}</b>.<br><br>
+				 Kho hàng sẽ được tự động cộng thêm.`, 
+				"confirm", 
+				async () => {
+					try {
+						// --- SỬA LỖI: Dùng biến 'item' thay vì 'currentReturnItem' ở mọi chỗ bên dưới ---
+						
+						// A. Cập nhật bảng order_items
+						const { data: currentItem } = await client.from('order_items').select('returned_quantity, order_id').eq('id', item.itemId).single();
+						const newReturnedQty = (currentItem.returned_quantity || 0) + qtyToReturn;
+						await client.from('order_items').update({ returned_quantity: newReturnedQty }).eq('id', item.itemId);
+
+						// B. Cập nhật kho hàng (products)
+						if (item.prodId) {
+							const prodInDb = productsDB.find(p => p.id === item.prodId);
+							if (prodInDb) {
+								const newStock = (prodInDb.quantity || 0) + qtyToReturn;
+								await client.from('products').update({ quantity: newStock }).eq('id', item.prodId);
+							}
+						}
+
+						// C. Cập nhật doanh thu đơn hàng (orders)
+						const refundAmt = qtyToReturn * item.price;
+						const orderId = currentItem.order_id;
+
+						const { data: ord } = await client.from('orders').select('returned_amount').eq('id', orderId).single();
+						
+						const newTotalRefund = (ord.returned_amount || 0) + refundAmt;
+						
+						await client.from('orders').update({ returned_amount: newTotalRefund }).eq('id', orderId);
+
+						showAlert("Thành công", "Đã trả hàng, nhập kho và trừ doanh thu!", "success");
+						
+						fetchProducts();
+						document.getElementById('history-detail-panel').classList.add('hidden');
+
+					} catch (err) {
+						console.error(err);
+						showAlert("Lỗi hệ thống", "Không thể cập nhật trả hàng: " + err.message, "error");
+					}
+				}
+			);
+		}
+
+		// Bắt sự kiện nhập tay vào ô số lượng để cập nhật tiền hoàn
+		document.getElementById('return-qty-input').addEventListener('input', function() {
+			let val = parseInt(this.value);
+			if(val > currentReturnItem.maxQty) this.value = currentReturnItem.maxQty;
+			if(val < 1) this.value = 1;
+			updateRefundAmount();
+		});
+
+        // --- PRODUCT MODAL ---
+        function openProductModal(id = null) {
+            document.getElementById('product-modal').classList.remove('hidden');
+            if(id) { 
+				const p = productsDB.find(x=>x.id==id);
+				document.getElementById('prod-id').value=p.id; 
+				document.getElementById('prod-name').value=p.name; 
+				document.getElementById('prod-barcode').value=p.barcode||""; 
+				document.getElementById('prod-itemcode').value=p.item_code||""; 
+				document.getElementById('prod-price').value=p.price; 
+				document.getElementById('prod-image').value=p.image||""; 
+				document.getElementById('prod-unit').value=p.unit||""; 
+				document.getElementById('prod-sale').value=p.sale_price||""; 
+				document.getElementById('prod-quantity').value = p.quantity || 0;
+			} 
+            else { 
+				document.getElementById('prod-id').value=""; 
+				document.getElementById('prod-name').value=""; 
+				document.getElementById('prod-barcode').value=""; 
+				document.getElementById('prod-itemcode').value=""; 
+				document.getElementById('prod-price').value=""; 
+				document.getElementById('prod-image').value=""; 
+				document.getElementById('prod-unit').value=""; 
+				document.getElementById('prod-sale').value="";
+				document.getElementById('prod-quantity').value="0";
+			}
+        }
+        async function saveProduct() {
+            const id = document.getElementById('prod-id').value;
+            const payload = { 
+				name: document.getElementById('prod-name').value, 
+				price: parseInt(document.getElementById('prod-price').value), 
+				sale_price: parseInt(document.getElementById('prod-sale').value) || null, 
+				barcode: document.getElementById('prod-barcode').value, 
+				item_code: document.getElementById('prod-itemcode').value, 
+				unit: document.getElementById('prod-unit').value, 
+				image: document.getElementById('prod-image').value,
+				quantity: parseInt(document.getElementById('prod-quantity').value) || 0 };
+            if(id) await client.from('products').update(payload).eq('id', id); 
+			else await client.from('products').insert(payload);
+			
+            document.getElementById('product-modal').classList.add('hidden'); 
+			fetchProducts(); 
+			showAlert("Đã lưu", "Cập nhật sản phẩm thành công", 'success');
+        }
+
+        // --- GENERAL ---
+        function confirmLogout() { showAlert("Đăng xuất", "Bạn chắc chắn muốn thoát phiên làm việc?", 'confirm', forceLogout); }
+        function handleManualInput(e) { 
+			const val = e.target.value.trim(); 
+			
+			if (val.endsWith('*') && val.length > 1) { 
+				setMultiplier(parseInt(val)); 
+				e.target.value = ''; 
+				return; 
+			} 
+			if (e.key === 'Enter') { 
+				addToCart(val); 
+				e.target.value = '';
+				e.target.blur();
+			} 
+		}
+        function setMultiplier(n) { if(!isNaN(n) && n>0) { currentMultiplier = n; document.getElementById('multiplier-badge').classList.remove('hidden'); document.getElementById('multiplier-val').innerText = n; } }
+        async function loadRevenue() { 
+			const { data: orders } = await client.from('orders').select('*'); 
+			if(!orders) return; 
+			const today = new Date().toDateString(), thisMonth = new Date().getMonth(); 
+			let sumD=0, cntD=0, sumM=0, cntM=0; 
+			orders.forEach(o => { 
+				const d=new Date(o.created_at);
+				
+				const realRevenue = o.total_amount - (o.returned_amount || 0);
+				
+				if(d.toDateString() === today) {
+					sumD += realRevenue; // Cộng doanh thu thực
+					cntD++;
+				}
+				if(d.getMonth() === thisMonth) {
+					sumM += realRevenue; // Cộng doanh thu thực
+					cntM++;
+				} 
+			}); 
+			document.getElementById('rev-today').innerText=formatMoney(sumD); 
+			document.getElementById('order-count-today').innerText=cntD+" đơn"; 
+			document.getElementById('rev-month').innerText=formatMoney(sumM); 
+			document.getElementById('order-count-month').innerText=cntM+" đơn"; 
+		}
+        
+        function parkOrder() { if(cart.length>0) { parkedOrders.push({id:Date.now(), items:[...cart]}); localStorage.setItem('pos_parked_orders',JSON.stringify(parkedOrders)); cart=[]; updateParkedBadge(); updateCartUI(); document.getElementById('last-scanned-card').classList.add('hidden'); showAlert("Đã lưu", "Đơn hàng đã được lưu vào mục chờ.", 'info'); } }
+        function showRecallModal() {
+            document.getElementById('recall-modal').classList.remove('hidden');
+            const container = document.getElementById('parked-list');
+            if (parkedOrders.length === 0) { container.innerHTML = '<p class="text-center text-gray-400 py-4">Chưa có giao dịch nào.</p>'; return; }
+            container.innerHTML = parkedOrders.map((o, i) => {
+                const itemsDetailHtml = o.items.map(item => `<div class="flex justify-between items-start py-2 border-b border-dashed border-gray-200 last:border-0"><div class="flex-1 pr-2"><div class="text-sm font-bold text-gray-700">${item.name}</div><div class="text-[10px] text-gray-500 mt-0.5"><span class="bg-gray-100 px-1 rounded border">Mã: ${item.barcode || '---'}</span></div></div><div class="text-right"><div class="text-sm font-bold text-blue-600">x${item.quantity}</div></div></div>`).join('');
+                return `<div class="bg-white border rounded-xl shadow-sm mb-4 overflow-hidden"><div class="bg-orange-50 p-3 flex justify-between items-center border-b border-orange-100"><div><span class="font-bold text-orange-800 text-sm">Giao dịch #${i + 1}</span></div><div class="flex gap-2"><button onclick="restoreOrder(${i})" class="bg-blue-600 text-white px-3 py-1.5 rounded text-xs font-bold">Gọi lại</button><button onclick="deleteParked(${i})" class="text-red-500 border border-red-200 px-2 py-1.5 rounded text-xs">Xóa</button></div></div><div class="p-3 bg-white">${itemsDetailHtml}</div></div>`;
+            }).join('');
+        }
+        function restoreOrder(i) { 
+            const doRestore = () => { cart=parkedOrders[i].items; parkedOrders.splice(i,1); localStorage.setItem('pos_parked_orders',JSON.stringify(parkedOrders)); updateParkedBadge(); updateCartUI(); document.getElementById('recall-modal').classList.add('hidden'); renderPaymentList(); document.getElementById('scan-screen').classList.add('hidden'); document.getElementById('payment-screen').classList.remove('hidden'); };
+            if(cart.length>0) showAlert("Ghi đè", "Giỏ hàng hiện tại đang có sản phẩm. Bạn có muốn ghi đè bằng đơn chờ này?", 'confirm', doRestore); else doRestore();
+        }
+        function deleteParked(i) { showAlert("Xóa đơn chờ", "Bạn muốn xóa đơn lưu tạm này?", 'confirm', () => { parkedOrders.splice(i,1); localStorage.setItem('pos_parked_orders',JSON.stringify(parkedOrders)); updateParkedBadge(); showRecallModal(); }); }
+        function updateParkedBadge() { const b=document.getElementById('parked-count'); b.innerText=parkedOrders.length; parkedOrders.length>0?b.classList.remove('hidden'):b.classList.add('hidden'); }
+        function voidTransaction() {
+			// 1. Kiểm tra: Nếu giỏ hàng trống thì báo lỗi và DỪNG NGAY
+			if (cart.length === 0) {
+				return showAlert("Giỏ hàng trống", "Chưa có sản phẩm nào để xóa!", 'info');
+			}
+
+			// 2. Nếu có hàng thì mới hiện bảng hỏi xác nhận
+			showAlert("Hủy đơn", "Bạn muốn xóa toàn bộ sản phẩm trong giỏ?", 'confirm', () => {
+				cart = [];
+				updateCartUI(); // Hàm này sẽ tự động cập nhật lại localStorage thành rỗng luôn
+				document.getElementById('last-scanned-card').classList.add('hidden');
+				
+				// (Tùy chọn) Rung nhẹ báo hiệu đã xóa
+				if(navigator.vibrate) navigator.vibrate(50);
+			});
+		}
+        
+        // --- CHECK PRICE ---
+        function openCheckPriceModal() { document.getElementById('check-price-modal').classList.remove('hidden'); document.getElementById('check-result').innerHTML = '<p class="text-gray-400">Mời nhập mã hoặc tên sản phẩm</p>'; setTimeout(() => document.getElementById('check-input').focus(), 100); }
+        function handleCheckPriceInput(e) {
+            if (e.key === 'Enter') { 
+				const val = e.target.value.trim().toLowerCase(); 
+				if (!val) return; 
+				
+				const p = productsDB.find(x => (x.barcode && x.barcode == val) || (x.item_code && x.item_code.toLowerCase() == val)) || productsDB.find(x => x.name.toLowerCase().includes(val)); 
+				
+				renderCheckResult(p); 
+				e.target.value = '';
+				e.target.blur();
+			}
+        }
+        function renderCheckResult(p) {
+            const el = document.getElementById('check-result');
+            if (!p) { el.innerHTML = `<div class="text-6xl mb-2">🤷‍♂️</div><h3 class="text-red-500 font-bold text-xl">Không tìm thấy!</h3>`; return; }
+            let priceHtml = ''; if (p.sale_price && p.sale_price < p.price) { priceHtml = `<div class="text-gray-400 line-through text-lg">${formatMoney(p.price)}</div><div class="text-red-600 font-bold text-4xl mt-1">${formatMoney(p.sale_price)}</div><span class="bg-red-100 text-red-600 px-2 py-0.5 rounded text-xs font-bold mt-1 inline-block">Đang giảm giá</span>`; } else { priceHtml = `<div class="text-blue-600 font-bold text-4xl mt-2">${formatMoney(p.price)}</div>`; }
+            el.innerHTML = `<img src="${p.image || PLACEHOLDER_IMG}" class="w-24 h-24 object-cover rounded-lg mb-2 shadow-sm border mx-auto"><h3 class="font-bold text-gray-800 text-xl leading-tight px-2">${p.name}</h3><div class="text-xs text-gray-500 mt-1">Mã: ${p.barcode || '---'} | Code: ${p.item_code || '---'}</div><div class="text-xs text-gray-500">ĐVT: ${p.unit || 'Cái'}</div>${priceHtml}${p.is_locked ? '<div class="mt-2 text-red-500 font-bold border border-red-200 bg-red-50 p-2 rounded">🔒 SẢN PHẨM ĐANG KHÓA</div>' : ''}`;
+        }
+
+        function formatMoney(n) { return new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(n); }
+        checkSession();
+		
+		// --- XỬ LÝ NÚT BACK TRÊN ĐIỆN THOẠI (History API) ---
+		window.addEventListener('popstate', function (event) {
+			// Kiểm tra xem màn hình nào đang mở để đóng lại
+			const paymentScreen = document.getElementById('payment-screen');
+			const adminScreen = document.getElementById('admin-screen');
+
+			// 1. Nếu đang ở màn hình Thanh toán -> Quay về Bán hàng
+			if (!paymentScreen.classList.contains('hidden')) {
+				paymentScreen.classList.add('hidden');
+				document.getElementById('scan-screen').classList.remove('hidden');
+				if (html5QrcodeScanner) html5QrcodeScanner.resume(); // Bật lại camera
+			}
+			
+			// 2. Nếu đang ở màn hình Admin -> Quay về Bán hàng
+			else if (!adminScreen.classList.contains('hidden')) {
+				adminScreen.classList.add('hidden');
+				document.getElementById('scan-screen').classList.remove('hidden');
+				if (html5QrcodeScanner) html5QrcodeScanner.resume(); // Bật lại camera
+			}
+		});
+		
+		// --- LOGIC HEARTBEAT (BÁO ONLINE & CHECK KICK) ---
+		let heartbeatInterval = null;
+
+		function startHeartbeat() {
+			if (heartbeatInterval) clearInterval(heartbeatInterval);
+			
+			// Gọi ngay lập tức lần đầu
+			pingServer();
+
+			// Lặp lại mỗi 30 giây
+			heartbeatInterval = setInterval(pingServer, 30000); 
+		}
+
+		async function pingServer() {
+			if (!currentUserEmail) return;
+
+			try {
+				// 1. Kiểm tra trạng thái bản thân
+				const { data: user, error } = await client
+					.from('app_users')
+					.select('*')
+					.eq('email', currentUserEmail)
+					.maybeSingle(); // Chuẩn: dùng maybeSingle để tránh lỗi nếu chưa có user
+
+				// Nếu chưa có -> Tự động thêm vào
+				if (!user && !error) {
+					await client.from('app_users').insert({ 
+						email: currentUserEmail, 
+						role: currentUserRole, // Lưu ý: Đảm bảo biến này đang chứa đúng role hiện tại
+						last_seen: new Date() 
+					});
+				}
+				
+				if (currentUserRole !== 'admin') {
+					const { data: settings } = await client.from('app_settings').select('maintenance_mode, maintenance_message').eq('id', 1).single();
+					
+					if (settings && settings.maintenance_mode) {
+						showAlert("HỆ THỐNG BẢO TRÌ", settings.maintenance_message, "error", () => {
+							forceLogout();
+						});
+						return; // Dừng ngay
+					}
+				}
+				
+				// Nếu đã có -> Kiểm tra trạng thái
+				if (user) {
+					// A. Nếu bị KHÓA hoặc bị KICK
+					if (user.is_locked || user.force_logout) {
+						
+						// Xử lý trường hợp Kick (Reset cờ trước khi đá)
+						if (user.force_logout) {
+							await client.from('app_users').update({ force_logout: false }).eq('email', currentUserEmail);
+							
+							// SỬA: Đưa forceLogout vào làm tham số thứ 4 (callback)
+							showAlert("CẢNH BÁO", '⚠️ BẠN ĐÃ BỊ BUỘC ĐĂNG XUẤT TỪ QUẢN TRỊ VIÊN.', "error", () => {
+								forceLogout(); 
+							});
+						} else {
+							// Trường hợp bị Khóa
+							showAlert("THÔNG BÁO", '⛔ TÀI KHOẢN CỦA BẠN ĐÃ BỊ KHÓA!', "error", () => {
+								forceLogout();
+							});
+						}
+						
+						// Ngắt hàm luôn để không chạy cập nhật last_seen bên dưới
+						return; 
+					}
+
+					// B. Nếu bình thường -> Cập nhật 'last_seen'
+					await client.from('app_users').update({ last_seen: new Date() }).eq('email', currentUserEmail);
+				}
+			} catch (e) { 
+				// Lỗi mạng hoặc lỗi server thì bỏ qua, không cần làm phiền user
+				console.log("Lỗi Heartbeat:", e); 
+			}
+		}
+		
+		// --- SYSTEM SETTINGS ---
+		async function fetchSystemSettings() {
+			const { data } = await client.from('app_settings').select('*').eq('id', 1).single();
+			if (data) {
+				// Lưu vào biến toàn cục
+				globalSettings.allow_print = data.allow_print;
+				globalSettings.enable_charts = data.enable_charts;
+				globalSettings.store_name = data.store_name || "CỬA HÀNG MINI POS";
+				globalSettings.store_address = data.store_address || "";
+				globalSettings.store_hotline = data.store_hotline || "";
+				globalSettings.receipt_footer = data.receipt_footer || "";
+				globalSettings.wifi_info = data.wifi_info || "";
+
+				// Đổ dữ liệu vào ô input trong tab Cài đặt
+				document.getElementById('sys-maintenance-toggle').checked = data.maintenance_mode;
+				document.getElementById('sys-print-toggle').checked = data.allow_print;
+				document.getElementById('sys-chart-toggle').checked = data.enable_charts;
+				document.getElementById('sys-message').value = data.maintenance_message;
+
+				// --- PHẦN MỚI ---
+				document.getElementById('sys-store-name').value = data.store_name || "";
+				document.getElementById('sys-store-address').value = data.store_address || "";
+				document.getElementById('sys-store-hotline').value = data.store_hotline || "";
+				document.getElementById('sys-footer').value = data.receipt_footer || "";
+				document.getElementById('sys-wifi').value = data.wifi_info || "";
+			}
+		}
+
+		async function saveSystemSettings() {
+			const maintMode = document.getElementById('sys-maintenance-toggle').checked;
+			const printMode = document.getElementById('sys-print-toggle').checked;
+			const chartMode = document.getElementById('sys-chart-toggle').checked;
+			const msg = document.getElementById('sys-message').value.trim();
+
+			// --- LẤY DỮ LIỆU TỪ INPUT MỚI ---
+			const sName = document.getElementById('sys-store-name').value.trim();
+			const sAddr = document.getElementById('sys-store-address').value.trim();
+			const sHotline = document.getElementById('sys-store-hotline').value.trim();
+			const sFoot = document.getElementById('sys-footer').value.trim();
+			const sWifi = document.getElementById('sys-wifi').value.trim();
+
+			showAlert("Lưu cài đặt", `Xác nhận cập nhật cấu hình hệ thống?`, 'confirm', async () => {
+				const { error } = await client.from('app_settings').update({
+					maintenance_mode: maintMode,
+					maintenance_message: msg,
+					allow_print: printMode,
+					enable_charts: chartMode,
+					// --- CẬP NHẬT CỘT MỚI ---
+					store_name: sName,
+					store_address: sAddr,
+					store_hotline: sHotline,
+					receipt_footer: sFoot,
+					wifi_info: sWifi
+				}).eq('id', 1);
+
+				if (error) {
+					showAlert("Lỗi", error.message, 'error');
+				} else {
+					// Cập nhật ngay vào biến bộ nhớ
+					globalSettings.allow_print = printMode;
+					globalSettings.enable_charts = chartMode;
+					globalSettings.store_name = sName;
+					globalSettings.store_address = sAddr;
+					globalSettings.store_hotline = sHotline;
+					globalSettings.receipt_footer = sFoot;
+					globalSettings.wifi_info = sWifi;
+
+					if(!document.getElementById('admin-revenue').classList.contains('hidden')){
+						switchAdminTab('revenue');
+					}
+					
+					showAlert("Thành công", "Đã cập nhật cấu hình hệ thống.", 'success');
+				}
+			});
+		}
+		
+		// ==========================================
+		// --- TÍNH NĂNG ĐĂNG NHẬP BẰNG QR CODE ---
+		// ==========================================
+		let html5QrCode; 
+
+		function startLoginScanner() {
+			const overlay = document.getElementById('login-scanner-overlay');
+			if (overlay) overlay.classList.remove('hidden');
+
+			if (!html5QrCode) {
+				// --- SỬA ID Ở ĐÂY CHO KHỚP VỚI HTML ---
+				html5QrCode = new Html5Qrcode("reader-login"); 
+			}
+
+			const config = { fps: 10, qrbox: 250, aspectRatio: 1.0 };
+
+			html5QrCode.start(
+				{ facingMode: "environment" },
+				config,
+				(decodedText) => {
+					// Khi quét thành công
+					console.log("QR Login Scan:", decodedText);
+					handleLoginQRResult(decodedText);
+				},
+				() => {} // Bỏ qua lỗi đang quét
+			).catch(err => {
+				console.error(err);
+				showAlert("Lỗi", 'Không mở được camera sau. Đang thử camera trước...', "error");
+				// Fallback sang camera trước nếu lỗi
+				html5QrCode.start({ facingMode: "user" }, config, (t) => handleLoginQRResult(t));
+			});
+		}
+
+		function stopLoginScanner() {
+			// 1. Tắt camera
+			if (html5QrCode && html5QrCode.isScanning) {
+				html5QrCode.stop().then(() => {
+					console.log("Đã tắt camera");
+					html5QrCode.clear();
+				}).catch(err => console.log("Lỗi tắt camera:", err));
+			}
+
+			// 2. Ẩn Overlay
+			const overlay = document.getElementById('login-scanner-overlay');
+			if (overlay) overlay.classList.add('hidden');
+		}
+
+		function handleLoginQRResult(text) {
+			try {
+				// 1. Thử giải mã JSON
+				const data = JSON.parse(text);
+				
+				console.log("Dữ liệu quét được:", data); // Xem trong Console F12
+
+				// 2. Kiểm tra dữ liệu
+				// Mã chuẩn phải có đủ 3 món: action="login", email, pass
+				if (data.action === 'login' && data.email && data.pass) {
+					
+					if(navigator.vibrate) navigator.vibrate(200);
+					stopLoginScanner();
+
+					document.getElementById('email').value = data.email;
+					document.getElementById('password').value = data.pass;
+					
+					document.getElementById('login-msg').innerText = "✅ Đã nhận mã! Đang đăng nhập...";
+					document.getElementById('login-msg').className = "text-center text-green-600 text-xs font-bold min-h-[20px]";
+
+					setTimeout(() => { handleLogin(); }, 500);
+
+				} else {
+					// --- ĐÂY LÀ CHỖ BÁO LỖI CỦA BẠN ---
+					let missing = [];
+					if (data.action !== 'login') missing.push(`Sai action (nhận được: ${data.action})`);
+					if (!data.email) missing.push("Thiếu Email");
+					if (!data.pass) missing.push("Thiếu Pass");
+
+					showAlert("Cảnh báo",'⚠️ Mã không hợp lệ!', "waning");
+				}
+			} catch (e) {
+				console.log("Lỗi đọc mã:", text);
+				showAlert("Lỗi", '❌ Lỗi format: Mã QR này không chứa dữ liệu JSON hợp lệ.', "error");
+			}
+		}
+		
+		// Lắng nghe sự kiện phím Enter tại ô mật khẩu
+		document.getElementById('qr-password-input').addEventListener('keyup', function (e) {
+			if (e.key === 'Enter') {
+				// Ẩn bàn phím ảo ngay lập tức để nhìn thấy màn hình
+				e.target.blur(); 
+				submitQRPassword();
+			}
+		});
+		
+		// === LOGIC CÀI ĐẶT NÚT SCAN (3 CHẾ ĐỘ MỚI) ===
+		let currentScanMode = localStorage.getItem('pos_scan_mode') || 'default'; // Mặc định là nút to
+
+		function initScanSettings() {
+			const radios = document.getElementsByName('scan_mode');
+			radios.forEach(r => {
+				if(r.value === currentScanMode) r.checked = true;
+			});
+			updateScanButtonBehavior();
+		}
+
+		// 2. Hàm mở bảng cài đặt
+		function openScanSettings() {
+			initScanSettings();
+			document.getElementById('scan-settings-modal').classList.remove('hidden');
+		}
+
+		// 3. Hàm lưu cài đặt khi chọn Radio
+		function saveScanMode(mode) {
+			currentScanMode = mode;
+			localStorage.setItem('pos_scan_mode', mode);
+			updateScanButtonBehavior();
+			
+			// Nếu chuyển chế độ, tốt nhất là tắt camera đi để reset giao diện
+			stopScanner();
+			
+			if(navigator.vibrate) navigator.vibrate(50);
+		}
+
+		// 4. Cập nhật hành vi nút bấm (QUAN TRỌNG)
+		function updateScanButtonBehavior() {
+			const containerSales = document.getElementById('scan-buttons-container');      // Chỗ bán hàng
+			const containerCheck = document.getElementById('scan-buttons-container-check'); // Chỗ check giá
+			const bigButton = document.getElementById('camera-placeholder'); // Nút to giữa màn hình
+			
+			// 1. Xóa nút cũ ở cả 2 nơi
+			if (containerSales) containerSales.innerHTML = "";
+			if (containerCheck) containerCheck.innerHTML = "";
+
+			if (currentScanMode === 'default') {
+				// --- CHẾ ĐỘ 1: MẶC ĐỊNH ---
+				if (bigButton && (!html5QrcodeScanner || !html5QrcodeScanner.isScanning)) {
+					bigButton.classList.remove('hidden');
+				}
+			} 
+			else {
+				// --- CHẾ ĐỘ 2 & 3: DÙNG NÚT NHỎ ---
+				if (bigButton) bigButton.classList.add('hidden');
+
+				// Logic tạo nút dựa trên chế độ
+				if (currentScanMode === 'toggle') {
+					// Thêm nút vào màn hình Bán hàng
+					if(containerSales) containerSales.appendChild(createToggleButton());
+					// Thêm nút vào màn hình Check giá (Phải tạo mới, không dùng lại biến cũ được)
+					if(containerCheck) containerCheck.appendChild(createToggleButton());
+				} 
+				else if (currentScanMode === 'hold') {
+					if(containerSales) containerSales.appendChild(createHoldButton());
+					if(containerCheck) containerCheck.appendChild(createHoldButton());
+				}
+			}
+		}
+
+		function createToggleButton() {
+			const btn = document.createElement('button');
+			
+			// --- THÊM ID ĐỂ DỄ QUẢN LÝ ---
+			btn.id = 'toggle-scan-btn'; 
+			// -----------------------------
+
+			btn.className = "w-14 h-12 rounded-xl bg-blue-600 text-white flex items-center justify-center text-2xl shadow-lg active:scale-90 transition-transform shrink-0";
+			
+			btn.innerHTML = `
+				<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-7 h-7">
+				  <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 013.75 9.375v-4.5zM3.75 14.625c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5a1.125 1.125 0 01-1.125-1.125v-4.5zM13.5 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 0113.5 9.375v-4.5z" />
+				  <path stroke-linecap="round" stroke-linejoin="round" d="M6.75 6.75h.75v.75h-.75v-.75zM6.75 16.5h.75v.75h-.75v-.75zM16.5 6.75h.75v.75h-.75v-.75zM13.5 13.5h.75v.75h-.75v-.75zM13.5 19.5h.75v.75h-.75v-.75zM19.5 13.5h.75v.75h-.75v-.75zM16.5 16.5h.75v.75h-.75v-.75zM16.5 19.5h.75v.75h-.75v-.75z" />
+				</svg>
+			`;
+			
+			btn.onclick = () => {
+				if (isScanning) {
+					stopScanner();
+					// Việc đổi màu sẽ do hàm stopScanner lo
+				} else {
+					startScanner();
+					// Bật lên thì đổi màu đỏ ngay tại đây
+					btn.classList.remove('bg-blue-600');
+					btn.classList.add('bg-red-600', 'animate-pulse');
+					
+					// Ẩn nút Stop to
+					const btnStop = document.getElementById('btn-stop-cam');
+					if(btnStop) btnStop.classList.add('hidden');
+				}
+			};
+			return btn;
+		}
+
+		function createHoldButton() {
+			const btn = document.createElement('button');
+			let holdTimer = null; // Biến lưu bộ đếm giờ
+			const HOLD_DELAY = 300; // Thời gian phải giữ (ms) để tính là "Giữ" (0.3 giây)
+
+			// Style
+			btn.className = "w-14 h-12 rounded-xl bg-orange-500 text-white flex items-center justify-center text-2xl shadow-lg transition-all shrink-0 select-none touch-none";
+			
+			// CSS chặn chọn văn bản/menu
+			btn.style.webkitUserSelect = "none";
+			btn.style.userSelect = "none";
+			btn.style.webkitTouchCallout = "none";
+
+			btn.innerHTML = "👆";
+
+			// --- HÀM KÍCH HOẠT (Chạy sau khi đã giữ đủ lâu) ---
+			const activateScanner = () => {
+				if (!isScanning) {
+					startScanner();
+					
+					// Hiệu ứng Visual: Nút lún sâu, đổi màu đỏ, viền sáng
+					btn.classList.add('scale-90', 'bg-red-600', 'ring-4', 'ring-red-300', 'shadow-inner');
+					btn.innerHTML = "📷"; // Đổi icon cho sinh động
+					
+					// Ẩn nút Stop to
+					const btnStop = document.getElementById('btn-stop-cam');
+					if(btnStop) btnStop.classList.add('hidden');
+
+					// Rung nhẹ 1 cái để báo hiệu đã bật
+					if (navigator.vibrate) navigator.vibrate(100);
+				}
+			};
+
+			// --- HÀM TẮT (Chạy khi buông tay) ---
+			const deactivateScanner = () => {
+				// 1. Nếu đang quét thì tắt ngay
+				if (isScanning) {
+					stopScanner();
+				}
+				
+				// 2. Reset giao diện nút về ban đầu
+				btn.classList.remove('scale-90', 'bg-red-600', 'ring-4', 'ring-red-300', 'shadow-inner');
+				btn.innerHTML = "👆";
+			};
+
+			// --- XỬ LÝ SỰ KIỆN ---
+
+			// 1. KHI BẮT ĐẦU CHẠM (START)
+			const handleStart = (e) => {
+				if (e.cancelable && e.type === 'touchstart') e.preventDefault();
+
+				// Hiệu ứng "Đang nhấn" nhẹ (để biết nút nhận lệnh)
+				btn.classList.add('opacity-80', 'scale-95');
+
+				// BẮT ĐẦU ĐẾM GIỜ
+				holdTimer = setTimeout(() => {
+					activateScanner(); // Hết giờ thì bật Camera
+				}, HOLD_DELAY);
+			};
+
+			// 2. KHI BUÔNG TAY HOẶC KÉO RA NGOÀI (STOP)
+			const handleStop = (e) => {
+				// Reset hiệu ứng "Đang nhấn"
+				btn.classList.remove('opacity-80', 'scale-95');
+
+				// QUAN TRỌNG NHẤT: Xóa bộ đếm giờ
+				// Nếu bạn buông tay trước 300ms, dòng này sẽ hủy lệnh activateScanner
+				// => Camera sẽ KHÔNG bao giờ bật.
+				if (holdTimer) {
+					clearTimeout(holdTimer);
+					holdTimer = null;
+				}
+
+				deactivateScanner();
+			};
+
+			// Gán sự kiện Touch (Điện thoại)
+			btn.addEventListener('touchstart', handleStart, { passive: false });
+			btn.addEventListener('touchend', handleStop);
+			btn.addEventListener('touchcancel', handleStop);
+
+			// Gán sự kiện Mouse (Máy tính)
+			btn.addEventListener('mousedown', handleStart);
+			btn.addEventListener('mouseup', handleStop);
+			btn.addEventListener('mouseleave', handleStop);
+
+			// Chặn menu chuột phải
+			btn.oncontextmenu = (e) => { e.preventDefault(); return false; };
+
+			return btn;
+		}
+
+		// Gọi hàm khởi tạo ngay khi script chạy (hoặc nhét vào checkSession)
+		setTimeout(initScanSettings, 500);
+		
+		// HÀM IN HÓA ĐƠN
+		function printReceipt(orderId, time, staff, items, total, received, change, isCopy = false) {
+			// 1. ĐIỀN THÔNG TIN TỪ CẤU HÌNH (THAY VÌ CỨNG)
+			document.getElementById('rec-store-name').innerText = globalSettings.store_name || "CỬA HÀNG MINI POS"; 
+			document.getElementById('rec-address').innerText = globalSettings.store_address || "";
+			document.getElementById('rec-hotline').innerText = globalSettings.store_hotline || "";
+			
+			// --- XỬ LÝ BẢN SAO (MỚI) ---
+			const copyLabel = document.getElementById('rec-is-copy');
+			if (isCopy) {
+				// Nếu là in lại -> Hiện chữ COPY
+				copyLabel.classList.remove('hidden');
+			} else {
+				// Nếu là in mới -> Ẩn chữ COPY (reset trạng thái cũ)
+				copyLabel.classList.add('hidden');
+			}
+			
+			// Cập nhật phần chân trang
+			document.getElementById('rec-footer-1').innerText = globalSettings.receipt_footer || "Cảm ơn quý khách!";
+			document.getElementById('rec-footer-2').innerText = globalSettings.wifi_info || "";
+
+			document.getElementById('rec-id').innerText = "#" + orderId;
+			document.getElementById('rec-time').innerText = new Date(time).toLocaleString('vi-VN');
+			document.getElementById('rec-staff').innerText = staff ? staff.split('@')[0] : 'Admin';
+			
+			const listEl = document.getElementById('rec-items-list');
+			
+			// --- PHẦN TIÊU ĐỀ BẢNG (THEAD) ---
+			// Ép cứng độ rộng và căn lề cho tiêu đề
+			const headerHtml = `
+				<thead>
+					<tr class="border-b border-black border-dashed">
+						<th class="w-[40%] text-left pb-1">Tên SP / Mã</th>
+						<th class="w-[15%] text-center pb-1">SL</th>
+						<th class="w-[20%] text-right pb-1">Giá</th>
+						<th class="w-[25%] text-right pb-1">Thành tiền</th>
+					</tr>
+				</thead>
+			`;
+
+			// --- PHẦN NỘI DUNG (TBODY) ---
+			const bodyHtml = items.map(i => {
+				let name = i.product_name || i.name; 
+				let code = i.barcode || i.item_code;
+				
+				// Tìm mã nếu thiếu
+				if (!code) {
+					 const p = productsDB.find(x => x.id === i.product_id) || productsDB.find(x => x.name === name);
+					 if (p) code = p.barcode || p.item_code;
+				}
+				const codeDisplay = code ? `${code}` : '';
+
+				return `
+				<tr>
+					<td class="align-top pr-1 font-bold pt-1" colspan="4">${name}</td>
+				</tr>
+				<tr class="border-b border-dashed border-gray-300">
+					<td class="text-[11px] align-top pt-0 pb-1 w-[40%]">${codeDisplay}</td>
+					
+					<td class="text-center align-top pt-0 pb-1 w-[15%] font-bold">x${i.quantity}</td>
+					
+					<td class="text-right align-top pt-0 pb-1 w-[20%]">${formatMoney(i.price).replace('₫','')}₫</td>
+					
+					<td class="text-right align-top font-bold pt-0 pb-1 w-[25%]">${formatMoney(i.total || (i.price*i.quantity)).replace('₫','')}₫</td>
+				</tr>
+				`;
+			}).join('');
+
+			// Gán lại HTML trọn bộ (bao gồm cả thead mới sửa)
+			document.querySelector('#receipt-print-area table').innerHTML = headerHtml + `<tbody id="rec-items-list">${bodyHtml}</tbody>`;
+
+			// Điền tổng tiền
+			document.getElementById('rec-total').innerText = formatMoney(total);
+			document.getElementById('rec-cash').innerText = received ? formatMoney(received) : "---";
+			document.getElementById('rec-change').innerText = change ? formatMoney(change) : "---";
+
+			setTimeout(() => { window.print(); }, 300); 
+		}
+		
+		// Hàm wrapper để gọi in từ lịch sử
+		function printHistoryOrder(id, time, itemsJson, total, received, change) {
+			const items = JSON.parse(decodeURIComponent(itemsJson));
+			// Staff lấy từ thông tin hiện tại hoặc phải lưu vào history nếu muốn chính xác người bán cũ
+			printReceipt(id, time, currentUserEmail, items, total, received, change, true);
+		}
+    </script>
+	<script>
+		// Đăng ký PWA Service Worker
+		if ('serviceWorker' in navigator) {
+			window.addEventListener('load', () => {
+				navigator.serviceWorker.register('./sw.js')
+					.then(reg => console.log('PWA đã sẵn sàng:', reg.scope))
+					.catch(err => console.log('Lỗi PWA:', err));
+			});
+		}
+	</script>
+</body>
+</html>
