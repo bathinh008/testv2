@@ -1534,9 +1534,17 @@
 				localStorage.setItem(MINI_POS_PASSKEY_KEY, JSON.stringify(saved));
 				refreshLocalPasskeyLoginButton();
 
-				showAlert("Thành công", "Đăng nhập bằng vân tay thành công.", "success", () => {
-					checkSession();
-				});
+				// Mở thẳng giao diện bán hàng sau khi xác thực vân tay thành công.
+				// Không chờ người dùng bấm OK trên popup, tránh tình trạng chỉ báo thành công nhưng không chuyển màn.
+				await checkSession();
+
+				// Dự phòng: nếu checkSession chưa kịp chuyển màn hình, ép mở màn bán hàng.
+				document.getElementById('login-screen')?.classList.add('hidden');
+				document.getElementById('scan-screen')?.classList.remove('hidden');
+				document.getElementById('admin-screen')?.classList.add('hidden');
+				document.getElementById('payment-screen')?.classList.add('hidden');
+
+				showAlert("Thành công", "Đăng nhập bằng vân tay thành công.", "success");
 			} catch (err) {
 				console.error("loginWithLocalPasskey error:", err);
 				let msg = err.message || String(err);
